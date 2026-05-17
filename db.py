@@ -212,7 +212,18 @@ def classify_chat_table(cur, table_name, name_map, uname2display, my_wxid_base) 
             }
         
         else:
-            # 规则4: 不足20条或非典型情况 → 按私聊处理，尝试映射对方名称
+            # 规则4: 不足20条或非典型情况
+            # 如果所有sender都是自己 → 自聊
+            all_self = all(is_self_wxid(name_map.get(sid, '')) for sid in sender_ids)
+            if all_self:
+                return {
+                    'chat_type': 'self',
+                    'chat_name': hash_short,
+                    'chat_hash': hash_short,
+                    'peer_wxid': '',
+                    'sender_id_list': sender_ids,
+                }
+            # 否则按私聊处理，尝试映射对方名称
             peer_wxid = ''
             peer_display = ''
             for sid in sender_ids:
