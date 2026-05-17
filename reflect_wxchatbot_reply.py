@@ -1,4 +1,4 @@
-"""
+﻿"""
 reflect_wxchatbot_reply.py — wxchatbot 本地反射回复模块
 启动: python reply_worker.py
 
@@ -98,11 +98,25 @@ def build_prompt(ga_data):
             msg_text += memory_text + "\n"
 
         msg_text += "\n## 当前新消息\n"
+        last_ts = None
         for m in msgs:
             sender = m.get('sender', '?')
             content = m.get('content', '')
             at_mark = " [@我]" if m.get('is_at') else ""
-            msg_text += f"- [{sender}]{at_mark}: {content}\n"
+            ts = m.get('timestamp', '')
+            ts_short = ts[11:16] + "  " if len(ts) >= 16 else ""
+            if last_ts and ts:
+                try:
+                    from datetime import datetime as _dt
+                    gap = (_dt.strptime(ts[:19], '%Y-%m-%d %H:%M:%S') - _dt.strptime(last_ts[:19], '%Y-%m-%d %H:%M:%S')).total_seconds()
+                    if gap >= 3600:
+                        msg_text += f"  ⏰ （距上一条 {gap/3600:.0f} 小时）\n"
+                    elif gap >= 300:
+                        msg_text += f"  ⏰ （距上一条 {gap/60:.0f} 分钟）\n"
+                except Exception:
+                    pass
+            last_ts = ts
+            msg_text += f"- {ts_short}[{sender}]{at_mark}: {content}\n"
 
     return f"""[WXCHATBOT 自动回复任务]
 
@@ -115,11 +129,13 @@ def build_prompt(ga_data):
 {msg_text}
 ## 要求
 1. 每个会话单独回复，回复要自然，像真人聊天
-2. 回复控制在50字以内
+2. 回复长度随意，像真人聊天一样有长有短
 3. 如果是群聊中被@的消息，优先回复
 4. 如果只是普通闲聊/表情包/转发，可以简短回复或不回复
 5. **群聊和私聊要区分**：群聊可能有多人发言，回复要有针对性
 6. 会话记忆只作为上下文参考，不要直接复述记忆内容
+7. 注意消息时间间隔：很久没回复时，语气可以体现时间感知（如"好久不见""终于想起我了"），但不要在回复里输出时间戳或时间格式
+8. 你的回复是你发出的微信消息文本，不要包含时间、日期、时间戳等格式化时间信息
 
 ## 输出格式（必须严格遵循）
 直接输出JSON，不要有其他内容：

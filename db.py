@@ -212,12 +212,20 @@ def classify_chat_table(cur, table_name, name_map, uname2display, my_wxid_base) 
             }
         
         else:
-            # 规则4: 未知（<20条）
+            # 规则4: 不足20条或非典型情况 → 按私聊处理，尝试映射对方名称
+            peer_wxid = ''
+            peer_display = ''
+            for sid in sender_ids:
+                wxid = name_map.get(sid, '')
+                if wxid and not is_self_wxid(wxid):
+                    peer_wxid = wxid
+                    peer_display = uname2display.get(wxid, wxid)
+                    break
             return {
-                'chat_type': 'unknown',
-                'chat_name': hash_short,
+                'chat_type': 'private',
+                'chat_name': peer_display or hash_short,
                 'chat_hash': hash_short,
-                'peer_wxid': '',
+                'peer_wxid': peer_wxid,
                 'sender_id_list': sender_ids,
             }
     
@@ -341,8 +349,8 @@ def _do_query(
             chat_hash_short = chat_info['chat_hash']  # hash缩写
             is_group = (chat_type == 'group')
             
-            # 自聊和未知类型：跳过，不处理
-            if chat_type in ('self', 'unknown'):
+            # 自聊：跳过，不处理
+            if chat_type == 'self':
                 # 仍然更新last_seq，避免下次重复扫描
                 chat_last_seq = last_seq_per_chat.get(table_hash, 0)
                 try:

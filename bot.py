@@ -1,4 +1,4 @@
-﻿"""
+"""
 wxchatbot 主程序 - 文件交换方案
 流程: poll DB → 黑白名单过滤 → 写pending.json → 等待reply.json → sender发送
 """
@@ -106,6 +106,45 @@ def load_config(config_path=None):
 
 # ============ 日志 ============
 
+class ConsoleStatusLine:
+    def __init__(self, stream=None):
+        self.stream = stream or sys.stderr
+        self.active = False
+        self.width = 0
+
+    def update(self, message):
+        padding = " " * max(0, self.width - len(message))
+        self.stream.write("\r" + message + padding)
+        self.stream.flush()
+        self.width = len(message)
+        self.active = True
+
+    def clear_for_log(self):
+        if not self.active:
+            return
+        self.stream.write("\r" + (" " * self.width) + "\r")
+        self.stream.flush()
+        self.active = False
+        self.width = 0
+
+    def finish(self):
+        if not self.active:
+            return
+        self.stream.write("\n")
+        self.stream.flush()
+        self.active = False
+        self.width = 0
+
+
+CONSOLE_STATUS = ConsoleStatusLine()
+
+
+class StatusAwareStreamHandler(logging.StreamHandler):
+    def emit(self, record):
+        CONSOLE_STATUS.finish()
+        super().emit(record)
+
+
 def setup_logger(log_level="INFO"):
     log_dir = PROJECT_DIR / "logs"
     log_dir.mkdir(exist_ok=True)
@@ -121,7 +160,7 @@ def setup_logger(log_level="INFO"):
     logger.addHandler(fh)
     
     # 控制台handler
-    ch = logging.StreamHandler()
+    ch = StatusAwareStreamHandler()
     ch.setFormatter(logging.Formatter('[%(asctime)s] %(message)s', datefmt='%H:%M:%S'))
     logger.addHandler(ch)
     
@@ -226,7 +265,8 @@ def format_messages_for_ga(raw_messages, config):
                 "sender": m['sender'],
                 "sender_wxid": m.get('sender_wxid', ''),
                 "content": m['content'],
-                "is_at": m.get('is_at', False)
+                "is_at": m.get('is_at', False),
+                "timestamp": m.get('timestamp', '')
             })
         
         results.append({
@@ -321,31 +361,8 @@ class WxChatBot:
         for msg in raw_msgs:
             by_chat[msg['chat_name']].append(msg)
         
-        # 启动时展示每个会话最近20条消息
-        self.logger.info(f"{'='*60}")
-        self.logger.info(f"📋 会话概览 ({len(by_chat)} 个会话，共 {len(raw_msgs)} 条消息)")
-        for chat_name, msgs in sorted(by_chat.items(), key=lambda x: -len(x[1])):
-            sample_msg = msgs[-1] if msgs else {}
-            is_group = sample_msg.get('is_group', False)
-            type_label = "群聊" if is_group else "私聊"
-            hash_short = chat_name[:4] + ".." + chat_name[-4:] if len(chat_name) > 12 else chat_name
-            chat_display = sample_msg.get('chat_display', hash_short)
-            last_msg = msgs[-1] if msgs else {}
-            last_is_self = last_msg.get('is_self', False)
-            status = "✅已回复" if last_is_self else "📨待回复"
-            
-            self.logger.info(f"─── [{type_label}][{chat_display}][{hash_short}] {len(msgs)}条 {status} ───")
-            recent = msgs[-20:] if len(msgs) > 20 else msgs
-            for m in recent:
-                sender = m.get('sender', '?')
-                sender_wxid = m.get('sender_wxid', '')
-                content = (m.get('content', '') or '')[:50]
-                is_self = m.get('is_self', False)
-                at_mark = ' @️⃣' if m.get('is_at') else ''
-                wxid_tag = f"({sender_wxid})" if sender_wxid else ""
-                self_marker = "👈" if is_self else ""
-                self.logger.info(f"  {sender}{wxid_tag}{self_marker}{at_mark}: {content}")
-        self.logger.info(f"{'='*60}")
+        self.logger.info("=" * 60)
+        self.logger.info(f"📋 新消息：{len(by_chat)} 个会话 / {len(raw_msgs)} 条")
         
         # Bug2修复：判定已回复——只看最后一条消息是否是自己发的
         chats_already_replied = set()
@@ -356,7 +373,9 @@ class WxChatBot:
                 is_group = last_msg.get('is_group', False)
                 type_label = "群聊" if is_group else "私聊"
                 chat_display = last_msg.get('chat_display', chat_name[:4]+".."+chat_name[-4:])
-                self.logger.info(f"  ⏭️ [{type_label}][{chat_display}] 最后一条是自己发的，已回复")
+                chat_hash = last_msg.get('chat_hash', chat_name)
+                hash_short = chat_hash[:4] + ".." + chat_hash[-4:] if len(chat_hash) > 12 else chat_hash
+                self.logger.info(f"  [{type_label}] {chat_display} [{hash_short}] · 最后一条是自己发的，跳过")
         
         # 黑白名单过滤 + 去掉is_self消息 + 去掉已回复会话
         filtered = []
@@ -372,7 +391,8 @@ class WxChatBot:
                 self.logger.debug(f"  跳过(黑名单): {chat_display}")
         
         if not filtered:
-            self.logger.info("  过滤后无待回复消息")
+            self.logger.info("  无待回复会话")
+            self.logger.info("=" * 60)
             return
         
         self.stats["messages_found"] += len(filtered)
@@ -394,28 +414,29 @@ class WxChatBot:
             hash_short = chat_hash[:4] + ".." + chat_hash[-4:] if len(chat_hash) > 12 else chat_hash
             
             if chat_already_replied:
-                status = "✅已回复"
+                status = "已回复"
             elif not needs_reply:
-                status = "⏭️无@跳过"
+                status = "无@跳过"
             else:
-                status = f"📨{msg_count}条待回复"
+                status = f"{msg_count}条待回复"
             
-            self.logger.info(f"  [{type_label}][{chat_name}][{hash_short}] {status}")
+            self.logger.info(f"  [{type_label}] {chat_name} [{hash_short}] · {status}")
             for m in chat_info["messages"]:
                 sender = m['sender']
                 sender_wxid = m.get('sender_wxid', '')
                 content_preview = m['content'][:50] + ('...' if len(m['content']) > 50 else '')
-                at_mark = ' @️⃣' if m.get('is_at') else ''
+                at_mark = ' @我' if m.get('is_at') else ''
                 wxid_tag = f"({sender_wxid})" if sender_wxid else ""
-                self.logger.info(f"    💬 {sender}{wxid_tag}{at_mark}: {content_preview}")
+                self.logger.info(f"    {sender}{wxid_tag}{at_mark}: {content_preview}")
         
         # 写pending.json（只写needs_reply=True的会话）
         reply_chats = [c for c in ga_data["chats"] if c.get("needs_reply", True)]
         if reply_chats:
             self.exchange.write_pending({"chats": reply_chats, "persona": ga_data.get("persona", "")})
-            self.logger.info(f"  ✅ pending.json 已写入 {len(reply_chats)} 个待回复会话，等待 reply_worker 处理")
+            self.logger.info(f"  pending.json 已写入 {len(reply_chats)} 个会话，等待 reply_worker")
         else:
-            self.logger.info("  ⏭️ 所有会话已回复/无需回复，不写pending")
+            self.logger.info("  所有会话已回复/无需回复，不写 pending")
+        self.logger.info("=" * 60)
         
         # 持久化cursor，防止重启后重复查询
         self.poll_state.save()
@@ -457,6 +478,10 @@ class WxChatBot:
                 self.logger.info(f"  ✅ 已发送回复到 [{chat}]")
             else:
                 self.logger.warning(f"  ⏭️ 未发送 [{chat}]: OCR未在聊天列表中找到该联系人，跳过")
+
+    def _update_poll_status(self, poll_no, dot_count=0):
+        ts = datetime.now().strftime('%H:%M:%S')
+        CONSOLE_STATUS.update(f"[{ts}]  第{poll_no}次轮询{'.' * dot_count}")
     
     def run(self):
         """主循环"""
@@ -493,12 +518,11 @@ class WxChatBot:
         
         # 主循环
         while self.running:
+            poll_no = self.stats["polls"] + 1
             try:
-                self.logger.info(f"📡 第{self.stats['polls']+1}次轮询开始...")
+                self._update_poll_status(poll_no)
                 self._poll_once()
                 self._check_reply()
-                self.stats["polls"] += 1
-                self.logger.info(f"📡 第{self.stats['polls']}次轮询完成，sleep {self.poll_interval}s")
             except KeyboardInterrupt:
                 self.running = False
                 break
@@ -506,12 +530,15 @@ class WxChatBot:
                 self.logger.error(f"主循环异常: {e}\n{traceback.format_exc()}")
             
             # sleep，每秒检查running状态
-            for _ in range(self.poll_interval):
+            for elapsed in range(self.poll_interval):
                 if not self.running:
                     break
                 time.sleep(1)
+                if self.running:
+                    self._update_poll_status(poll_no, elapsed + 1)
         
         # 退出
+        CONSOLE_STATUS.finish()
         elapsed = datetime.now() - datetime.fromisoformat(self.stats["start_time"]) if self.stats["start_time"] else 0
         self.logger.info(f"🛑 wxchatbot 已停止")
         self.logger.info(f"  运行时长: {elapsed}")

@@ -124,6 +124,29 @@ def call_llm(prompt: str, config: LLMConfig, post_json=post_json, log_func=log_l
         raise RuntimeError(f"Unexpected LLM response: {data}") from exc
 
 
+def _load_fallback_phrases(key, default=None):
+    """Load fallback phrases from config.yaml"""
+    try:
+        import yaml
+        with open(PROJECT_DIR / "config.yaml", "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        return cfg.get(key, default or [])
+    except Exception:
+        return default or []
+
+
+def _pick_fallback(chat_name, is_group, sender, phrase_list):
+    """Create a fallback reply JSON for a single chat"""
+    import random
+    return {
+        "chat": chat_name,
+        "content": random.choice(phrase_list) if phrase_list else "我现在不方便回复",
+        "is_group": is_group,
+        "sender": sender,
+        "skip": False,
+    }
+
+
 def run_once(reflect_module, config: LLMConfig, call_llm_func=call_llm) -> bool:
     task = reflect_module.check()
     if task is None:
@@ -132,8 +155,38 @@ def run_once(reflect_module, config: LLMConfig, call_llm_func=call_llm) -> bool:
         raise SystemExit(0)
 
     log_line(f"Reflect triggered, prompt {len(task)} chars")
-    result = call_llm_func(task, config)
-    log_line(f"LLM completed, result {len(result)} chars")
+
+    try:
+        result = call_llm_func(task, config)
+        log_line(f"LLM completed, result {len(result)} chars")
+    except Exception as exc:
+        err_msg = str(exc)
+        log_line(f"ERROR {type(exc).__name__}: {err_msg}")
+        # LLM unavailable (auth error, billing, network)
+        if any(kw in err_msg.lower() for kw in ["401", "402", "403", "billing", "payment", "quota", "insufficient", "connection", "timeout", "refused"]):
+            phrases = _load_fallback_phrases("fallback_unavailable")
+            if phrases and hasattr(reflect_module, "_pending_chats"):
+                import random
+                replies = [_pick_fallback(c["chat"], c.get("is_group", False), c.get("sender", ""), phrases) for c in reflect_module._pending_chats]
+                log_line(f"LLM unavailable, using fallback_unavailable for {len(replies)} chats")
+                if hasattr(reflect_module, "on_done"):
+                    reflect_module.on_done(json.dumps(replies, ensure_ascii=False))
+                return True
+        raise
+
+    # Check if LLM result looks like a content policy refusal
+    refusal_markers = ["i cannot", "i can't", "作为ai", "as an ai", "i'm unable", "抱歉", "无法", "不当", "inappropriate"]
+    result_lower = result.lower()
+    if any(marker in result_lower for marker in refusal_markers):
+        phrases = _load_fallback_phrases("fallback_sensitive")
+        if phrases and hasattr(reflect_module, "_pending_chats"):
+            replies = [_pick_fallback(c["chat"], c.get("is_group", False), c.get("sender", ""), phrases) for c in reflect_module._pending_chats]
+            log_line(f"LLM refused content, using fallback_sensitive for {len(replies)} chats")
+            # Write fallback replies directly
+            if hasattr(reflect_module, "on_done"):
+                reflect_module.on_done(json.dumps(replies, ensure_ascii=False))
+            return True
+
     if hasattr(reflect_module, "on_done"):
         reflect_module.on_done(result)
     return True
