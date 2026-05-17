@@ -390,6 +390,18 @@ class WxChatBot:
             else:
                 self.logger.debug(f"  跳过(黑名单): {chat_display}")
         
+        # 更新所有会话记忆（含无需回复的消息）
+        try:
+            from chat_memory import update_memory
+            for chat_name, msgs in by_chat.items():
+                non_self = [m for m in msgs if not m.get('is_self')]
+                if non_self:
+                    chat_hash = non_self[0].get('chat_hash', chat_name)
+                    is_group = non_self[0].get('is_group', False)
+                    update_memory(chat_hash, non_self, reply=None, is_group=is_group)
+        except Exception as e:
+            self.logger.debug(f"  记忆更新跳过: {e}")
+
         if not filtered:
             self.logger.info("  无待回复会话")
             self.logger.info("=" * 60)
