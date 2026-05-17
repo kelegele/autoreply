@@ -90,12 +90,31 @@ def test_build_prompt_shows_timestamps_and_gap():
     # Check the rule about not outputting time formats
     assert "不要包含时间、日期、时间戳" in prompt
 
+def test_build_prompt_tells_group_reply_not_to_prefix_at_name():
+    import reflect_wxchatbot_reply as reflect
+
+    prompt = reflect.build_prompt(
+        {
+            "persona": "你是测试人格",
+            "chats": [
+                {
+                    "chat": "测试群",
+                    "is_group": True,
+                    "messages": [{"sender": "示例用户", "content": "@Flerken 你好", "is_at": True}],
+                }
+            ],
+        }
+    )
+
+    assert "群聊回复正文不要以 @昵称 开头" in prompt
+
 
 if __name__ == "__main__":
     tests = [
         test_build_prompt_includes_chat_memory,
         test_build_prompt_includes_memory_message_times,
         test_build_prompt_shows_timestamps_and_gap,
+        test_build_prompt_tells_group_reply_not_to_prefix_at_name,
     ]
     for test in tests:
         test()

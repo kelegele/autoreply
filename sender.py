@@ -178,6 +178,14 @@ def find_text(details, target, exact=True, x_min=None, x_max=None, y_min=None, y
         matches.append({'text': t, 'cx': cx, 'cy': cy, 'score': score})
     return matches
 
+def strip_leading_at_mention(msg, at_name):
+    """Remove LLM-generated leading @name because WeChat @ is inserted separately."""
+    if not at_name:
+        return msg
+    text = str(msg or "")
+    pattern = rf"^(?:\s*@{re.escape(at_name)}[\s\u2005\u2006\u2009\u200a\u202f\u205f\u3000]*)+"
+    return re.sub(pattern, "", text).lstrip()
+
 
 
 # ═══════════════════════════════════════
@@ -296,6 +304,7 @@ def _do_send(hwnd, msg, at_name=None):
     time.sleep(0.3)
 
     if at_name:
+        msg = strip_leading_at_mention(msg, at_name)
         # ── 群聊 @ 模式：先输入 @昵称 触发微信匹配 ──
         clip = _get_clipboard()
         at_text = f"@{at_name}"
