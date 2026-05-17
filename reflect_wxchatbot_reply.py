@@ -74,8 +74,10 @@ def _format_memory(memory):
         for item in recent[-12:]:
             sender = item.get('sender') or item.get('role') or '?'
             content = str(item.get('content', '')).strip()
+            ts = str(item.get('time', '') or item.get('timestamp', ''))
+            ts_short = ts[11:16] + "  " if len(ts) >= 16 else ""
             if content:
-                lines.append(f"- [{sender}]: {content}")
+                lines.append(f"- {ts_short}[{sender}]: {content}")
     return "\n".join(lines)
 
 

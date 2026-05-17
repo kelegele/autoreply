@@ -27,6 +27,36 @@ def test_build_prompt_includes_chat_memory():
     assert "[bot]: 记得，别催啦" in prompt
     assert "[示例用户]: 那今天呢？" in prompt
 
+def test_build_prompt_includes_memory_message_times():
+    import reflect_wxchatbot_reply as reflect
+
+    ga_data = {
+        "persona": "你是测试人格",
+        "chats": [
+            {
+                "chat": "示例用户",
+                "is_group": False,
+                "memory": {
+                    "summary": "",
+                    "recent_messages": [
+                        {
+                            "role": "user",
+                            "sender": "示例用户",
+                            "content": "很久之前说过的事",
+                            "time": "2026-05-18 01:23:45",
+                        }
+                    ],
+                },
+                "messages": [{"sender": "示例用户", "content": "还记得吗？"}],
+            }
+        ],
+    }
+
+    prompt = reflect.build_prompt(ga_data)
+
+    assert "01:23" in prompt
+    assert "[示例用户]: 很久之前说过的事" in prompt
+
 
 
 def test_build_prompt_shows_timestamps_and_gap():
@@ -62,7 +92,11 @@ def test_build_prompt_shows_timestamps_and_gap():
 
 
 if __name__ == "__main__":
-    tests = [test_build_prompt_includes_chat_memory, test_build_prompt_shows_timestamps_and_gap]
+    tests = [
+        test_build_prompt_includes_chat_memory,
+        test_build_prompt_includes_memory_message_times,
+        test_build_prompt_shows_timestamps_and_gap,
+    ]
     for test in tests:
         test()
         print(f"PASS {test.__name__}")

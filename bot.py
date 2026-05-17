@@ -9,7 +9,7 @@ from datetime import datetime
 PROJECT_DIR = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_DIR))
 
-from db import DBConfig, PollState, query_new_messages, build_uname2display
+from db import DBConfig, PollState, query_new_messages, query_recent_messages, build_uname2display
 from sender import find_wechat_window, send_to
 
 # ============ 配置加载 ============
@@ -285,6 +285,49 @@ def format_messages_for_ga(raw_messages, config):
     }
 
 
+def refresh_startup_memory(db_config, uname2display, logger, limit=20, query_func=None, update_func=None):
+    """启动时把每个会话最近消息刷新进本地记忆，不推进 poll_state。"""
+    query_func = query_func or query_recent_messages
+    if update_func is None:
+        from chat_memory import update_memory
+        update_func = update_memory
+
+    try:
+        messages = query_func(
+            db_path=db_config.msg_db_path,
+            key=db_config.msg_key_bytes,
+            my_wxid=db_config.my_wxid,
+            uname2display=uname2display,
+            limit_per_chat=limit,
+            timeout=getattr(db_config, "decrypt_timeout", 15),
+            max_retries=getattr(db_config, "decrypt_max_retries", 3),
+            my_display_name=getattr(db_config, "my_display_name", ""),
+        )
+    except Exception as e:
+        logger.warning(f"启动记忆刷新失败: {e}")
+        return 0
+
+    from collections import defaultdict
+    by_chat = defaultdict(list)
+    for message in messages:
+        by_chat[message.get("chat_hash") or message.get("chat_name")].append(message)
+
+    updated = 0
+    for _, chat_messages in by_chat.items():
+        if not chat_messages:
+            continue
+        first = chat_messages[0]
+        chat = {
+            "chat": first.get("chat_name", ""),
+            "chat_hash": first.get("chat_hash", ""),
+            "is_group": bool(first.get("is_group", False)),
+        }
+        update_func(chat, chat_messages)
+        updated += 1
+
+    logger.info(f"启动记忆刷新完成: {updated} 个会话 / {len(messages)} 条，最近 {limit} 条/会话")
+    return updated
+
 # ============ 主循环 ============
 
 class WxChatBot:
@@ -396,9 +439,15 @@ class WxChatBot:
             for chat_name, msgs in by_chat.items():
                 non_self = [m for m in msgs if not m.get('is_self')]
                 if non_self:
-                    chat_hash = non_self[0].get('chat_hash', chat_name)
-                    is_group = non_self[0].get('is_group', False)
-                    update_memory(chat_hash, non_self, reply=None, is_group=is_group)
+                    first = non_self[0]
+                    update_memory(
+                        {
+                            "chat": first.get("chat_name", chat_name),
+                            "chat_hash": first.get("chat_hash", chat_name),
+                            "is_group": first.get("is_group", False),
+                        },
+                        non_self,
+                    )
         except Exception as e:
             self.logger.debug(f"  记忆更新跳过: {e}")
 
@@ -516,6 +565,8 @@ class WxChatBot:
         
         self.logger.info("=" * 50)
         
+        refresh_startup_memory(self.db_config, self.uname2display, self.logger, limit=20)
+
         # 注册信号处理
         def _signal_handler(sig, frame):
             self.logger.info("收到停止信号，退出...")

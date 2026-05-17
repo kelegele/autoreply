@@ -316,6 +316,154 @@ def query_new_messages(
     
     return []
 
+def query_recent_messages(
+    db_path: str,
+    key: bytes,
+    my_wxid: str,
+    uname2display: dict,
+    limit_per_chat: int = 20,
+    timeout: int = 15,
+    max_retries: int = 3,
+    my_display_name: str = '',
+) -> list:
+    """读取每个主消息表最近 N 条文本消息，不更新轮询游标。"""
+    for attempt in range(max_retries):
+        result_holder = {'result': None}
+
+        def _worker():
+            try:
+                result_holder['result'] = _do_query_recent(
+                    db_path, key, my_wxid, uname2display, limit_per_chat, my_display_name
+                )
+            except Exception as e:
+                print(f'[ERROR] recent query worker: {e}')
+                traceback.print_exc()
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        t.join(timeout)
+
+        if t.is_alive():
+            print(f'[WARN] 最近消息解密超时(尝试{attempt+1}/{max_retries})')
+            continue
+
+        return result_holder['result'] or []
+
+    return []
+
+def _do_query_recent(db_path, key, my_wxid, uname2display, limit_per_chat, my_display_name='') -> list:
+    conn = tmp = None
+    result = []
+
+    try:
+        conn, tmp = decrypt_db_to_sqlite(db_path, key)
+        cur = conn.cursor()
+        main_tables = get_all_main_msg_tables(cur)
+
+        name_map = {}
+        try:
+            cur.execute("SELECT rowid, * FROM Name2Id")
+            for r in cur.fetchall():
+                name_map[r[0]] = r[1]
+        except:
+            pass
+
+        my_wxid_base = my_wxid.rsplit('_', 1)[0] if my_wxid and '_' in my_wxid else my_wxid
+
+        def is_self_wxid(wxid):
+            if not wxid:
+                return False
+            return wxid == my_wxid or wxid == my_wxid_base
+
+        for table_name in main_tables:
+            table_hash = table_name.replace('Msg_', '').lower()
+            chat_info = classify_chat_table(cur, table_name, name_map, uname2display, my_wxid_base)
+            chat_type = chat_info['chat_type']
+            if chat_type == 'self':
+                continue
+
+            chat_display = chat_info['chat_name']
+            is_group = (chat_type == 'group')
+
+            try:
+                cur.execute(
+                    f"SELECT local_id, server_id, local_type, real_sender_id, create_time, message_content "
+                    f"FROM ("
+                    f"  SELECT local_id, server_id, local_type, real_sender_id, create_time, message_content "
+                    f"  FROM {table_name} WHERE local_type = 1 ORDER BY local_id DESC LIMIT ?"
+                    f") ORDER BY local_id",
+                    (limit_per_chat,),
+                )
+                rows = cur.fetchall()
+            except Exception:
+                continue
+
+            for (lid, server_id, ltype, sender_id, ctime, content) in rows:
+                if isinstance(content, bytes):
+                    non_text = sum(1 for b in content if b < 0x20 and b not in (0x0a, 0x0d, 0x09))
+                    if len(content) > 0 and non_text / len(content) > 0.3:
+                        continue
+                    content = content.decode('utf-8', errors='replace')
+                if not content:
+                    continue
+
+                sender_wxid = name_map.get(sender_id, str(sender_id))
+                sender_display = uname2display.get(sender_wxid, uname2display.get(str(sender_id), f'id_{sender_id}'))
+                is_self = is_self_wxid(sender_wxid)
+                body = content
+
+                if is_group:
+                    import re as _re
+                    m = _re.match(r'^(wxid_[a-zA-Z0-9_]+)\s*:\s*\n?(.*)', body, re.DOTALL)
+                    if m:
+                        group_sender_wxid = m.group(1)
+                        body = m.group(2).strip()
+                        sender_wxid = group_sender_wxid
+                        sender_display = uname2display.get(group_sender_wxid, group_sender_wxid)
+                        is_self = is_self_wxid(sender_wxid)
+                else:
+                    if sender_display:
+                        for pfx in [sender_display + ':', sender_display + '：']:
+                            if body.startswith(pfx):
+                                body = body[len(pfx):].strip()
+                                break
+
+                at_me = f'@{my_wxid}' in content or f'@{my_wxid}' in body
+                if not at_me and my_display_name:
+                    at_me = f'@{my_display_name}' in content or f'@{my_display_name}' in body
+
+                ts = datetime.fromtimestamp(ctime).strftime('%Y-%m-%d %H:%M:%S') if ctime else ''
+                result.append({
+                    'local_id': lid,
+                    'server_id': server_id,
+                    'sender': sender_display,
+                    'sender_wxid': sender_wxid,
+                    'sender_id': sender_id,
+                    'content': body,
+                    'is_at': at_me,
+                    'chat_name': chat_display,
+                    'chat_hash': table_hash,
+                    'chat_type': chat_type,
+                    'timestamp': ts,
+                    'is_group': is_group,
+                    'is_self': is_self,
+                })
+
+        conn.close()
+        conn = None
+    except Exception as e:
+        print(f'[ERROR] _do_query_recent: {e}')
+        traceback.print_exc()
+    finally:
+        if conn:
+            try: conn.close()
+            except: pass
+        if tmp and os.path.exists(tmp):
+            try: os.remove(tmp)
+            except: pass
+
+    result.sort(key=lambda x: (x.get('chat_hash', ''), x.get('local_id', 0)))
+    return result
 
 def _do_query(
     db_path, key, last_seq_per_chat, seen_ids, 

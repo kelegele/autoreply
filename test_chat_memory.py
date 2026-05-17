@@ -70,7 +70,7 @@ def test_update_memory_appends_incoming_and_reply_then_trims():
     from chat_memory import ChatMemoryStore, update_memory_after_replies
 
     with tempfile.TemporaryDirectory() as tmp:
-        store = ChatMemoryStore(Path(tmp), max_recent=3)
+        store = ChatMemoryStore(Path(tmp), max_recent=3, summarize_fn=lambda summary, messages, chat: summary)
         pending = {
             "chats": [
                 {
@@ -91,6 +91,108 @@ def test_update_memory_appends_incoming_and_reply_then_trims():
 
     assert [m["content"] for m in memory["recent_messages"]] == ["第一句", "第二句", "回复"]
 
+def test_default_store_keeps_latest_50_messages():
+    from chat_memory import ChatMemoryStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChatMemoryStore(Path(tmp), summarize_fn=lambda summary, messages, chat: summary + " summarized")
+        chat = {"chat": "示例用户", "chat_hash": "abc123", "is_group": False}
+        memory = store.load(chat)
+        memory["recent_messages"] = [
+            {"role": "user", "sender": "示例用户", "content": f"消息{i}", "time": "t"}
+            for i in range(55)
+        ]
+
+        store.save(chat, memory)
+        reloaded = store.load(chat)
+
+    assert len(reloaded["recent_messages"]) == 50
+    assert reloaded["recent_messages"][0]["content"] == "消息5"
+    assert reloaded["summary"] == "summarized"
+
+def test_update_memory_records_skipped_chat_messages_without_reply():
+    from chat_memory import ChatMemoryStore, update_memory
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChatMemoryStore(Path(tmp))
+        update_memory(
+            {
+                "chat": "示例群聊",
+                "chat_hash": "group123",
+                "is_group": True,
+            },
+            [
+                {
+                    "sender": "Kat",
+                    "sender_wxid": "wxid_kat",
+                    "content": "不用回复但要记住",
+                    "timestamp": "2026-05-18 01:02:03",
+                }
+            ],
+            store=store,
+        )
+
+        memory = store.load({"chat": "示例群聊", "chat_hash": "group123", "is_group": True})
+
+    assert memory["recent_messages"] == [
+        {
+            "role": "user",
+            "sender": "Kat",
+            "sender_wxid": "wxid_kat",
+            "content": "不用回复但要记住",
+            "time": "2026-05-18 01:02:03",
+        }
+    ]
+
+def test_update_memory_records_self_messages_as_assistant():
+    from chat_memory import ChatMemoryStore, update_memory
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChatMemoryStore(Path(tmp))
+        update_memory(
+            {"chat": "示例用户", "chat_hash": "abc123", "is_group": False},
+            [
+                {
+                    "sender": "我",
+                    "content": "之前我已经回过了",
+                    "timestamp": "2026-05-18 01:02:03",
+                    "is_self": True,
+                }
+            ],
+            store=store,
+        )
+        memory = store.load({"chat": "示例用户", "chat_hash": "abc123", "is_group": False})
+
+    assert memory["recent_messages"][0]["role"] == "assistant"
+    assert memory["recent_messages"][0]["sender"] == "bot"
+
+def test_summarizes_overflow_before_trimming():
+    from chat_memory import ChatMemoryStore
+
+    calls = []
+
+    def fake_summarize(summary, messages, chat):
+        calls.append((summary, [m["content"] for m in messages], chat["chat"]))
+        return "旧摘要 + 前2条"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChatMemoryStore(Path(tmp), max_recent=50, summarize_fn=fake_summarize)
+        chat = {"chat": "示例用户", "chat_hash": "abc123", "is_group": False}
+        memory = store.load(chat)
+        memory["summary"] = "旧摘要"
+        memory["recent_messages"] = [
+            {"role": "user", "sender": "示例用户", "content": f"消息{i}", "time": "t"}
+            for i in range(52)
+        ]
+
+        store.save(chat, memory)
+        reloaded = store.load(chat)
+
+    assert calls == [("旧摘要", ["消息0", "消息1"], "示例用户")]
+    assert reloaded["summary"] == "旧摘要 + 前2条"
+    assert len(reloaded["recent_messages"]) == 50
+    assert reloaded["recent_messages"][0]["content"] == "消息2"
+
 
 if __name__ == "__main__":
     tests = [
@@ -100,6 +202,10 @@ if __name__ == "__main__":
         test_store_saves_and_reloads_memory,
         test_enrich_pending_adds_memory_to_each_chat,
         test_update_memory_appends_incoming_and_reply_then_trims,
+        test_default_store_keeps_latest_50_messages,
+        test_update_memory_records_skipped_chat_messages_without_reply,
+        test_update_memory_records_self_messages_as_assistant,
+        test_summarizes_overflow_before_trimming,
     ]
     for test in tests:
         test()
