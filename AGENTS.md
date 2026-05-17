@@ -4,7 +4,7 @@
 
 本仓库是一个 Windows 微信自动回复机器人，源码以根目录 Python 脚本为主。`bot.py` 是主轮询入口，负责读取配置、拉取消息、写入 `exchange/` 交互文件并触发发送；`reply_worker.py` 是本地反射回复进程，负责调用 LLM 并写回回复；`db.py` 负责解密后微信数据库读取；`sender.py`、`ljqCtrl.py` 负责微信窗口与点击输入自动化；`ocr_utils.py` 提供截图和 OCR；`reflect_wxchatbot_reply.py` 处理 prompt 构造与回复解析。
 
-运行期目录不要当作源码修改：`exchange/` 存放待回复和回复文件，`state/` 存放轮询状态和 `chat_memory/` 会话记忆，`logs/` 存放日志，`db_export/` 存放导出的聊天数据库 CSV。项目文档放在 `docs/`。
+运行期目录不要当作源码修改：`exchange/` 存放待回复和回复文件，`state/` 存放轮询状态、`chat_memory/` 会话记忆和 `token_usage.json` token 统计，`logs/` 存放日志，`db_export/` 存放导出的聊天数据库 CSV。项目文档放在 `docs/`。
 
 ## 外部依赖
 

@@ -217,7 +217,7 @@ def summarize_memory_with_llm(existing_summary: str, messages: list[dict], chat:
     from dotenv import load_dotenv
 
     load_dotenv(Path(__file__).parent / ".env", override=False)
-    from reply_worker import call_llm, load_llm_config
+    from reply_worker import call_llm_with_usage, load_llm_config
 
     chat_type = "群聊" if chat.get("is_group") else "私聊"
     prompt = f"""请把以下微信会话历史压缩为长期记忆摘要，用中文，保留人物关系、偏好、重要事实、未解决事项和最近情绪。
@@ -231,7 +231,18 @@ def summarize_memory_with_llm(existing_summary: str, messages: list[dict], chat:
 {_format_messages_for_summary(messages)}
 
 更新后的长期摘要:"""
-    return call_llm(prompt, load_llm_config(), log_func=None).strip()
+    config = load_llm_config()
+    result = call_llm_with_usage(prompt, config, log_func=None)
+    if result.usage:
+        from token_usage import DEFAULT_TOKEN_USAGE_FILE, record_token_usage
+
+        record_token_usage(
+            DEFAULT_TOKEN_USAGE_FILE,
+            result.usage,
+            source="system.memory_summarize",
+            model=getattr(config, "model", ""),
+        )
+    return result.content.strip()
 
 
 def enrich_pending_with_memory(pending: dict, store: ChatMemoryStore | None = None) -> dict:

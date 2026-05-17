@@ -22,6 +22,12 @@ class LLMConfig:
     timeout: int = 120
     temperature: float | None = None
 
+@dataclass(frozen=True)
+class LLMResult:
+    content: str
+    usage: dict
+    raw: dict
+
 
 def chat_completions_url(base_url: str) -> str:
     url = base_url.rstrip("/")
@@ -91,7 +97,7 @@ def post_json(url, headers, payload, timeout):
     return json.loads(data)
 
 
-def call_llm(prompt: str, config: LLMConfig, post_json=post_json, log_func=log_line) -> str:
+def call_llm_with_usage(prompt: str, config: LLMConfig, post_json=post_json, log_func=log_line) -> LLMResult:
     payload = {
         "model": config.model,
         "messages": [{"role": "user", "content": prompt}],
@@ -119,9 +125,13 @@ def call_llm(prompt: str, config: LLMConfig, post_json=post_json, log_func=log_l
     if log_func:
         log_func(f"LLM raw response:\n{_json_pretty(data)}")
     try:
-        return data["choices"][0]["message"]["content"]
+        content = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
         raise RuntimeError(f"Unexpected LLM response: {data}") from exc
+    return LLMResult(content=content, usage=data.get("usage") or {}, raw=data)
+
+def call_llm(prompt: str, config: LLMConfig, post_json=post_json, log_func=log_line) -> str:
+    return call_llm_with_usage(prompt, config, post_json=post_json, log_func=log_func).content
 
 
 def _load_fallback_phrases(key, default=None):
@@ -147,7 +157,12 @@ def _pick_fallback(chat_name, is_group, sender, phrase_list):
     }
 
 
-def run_once(reflect_module, config: LLMConfig, call_llm_func=call_llm) -> bool:
+def _coerce_llm_result(result) -> LLMResult:
+    if isinstance(result, LLMResult):
+        return result
+    return LLMResult(content=str(result), usage={}, raw={})
+
+def run_once(reflect_module, config: LLMConfig, call_llm_func=call_llm_with_usage, token_usage_path=None) -> bool:
     task = reflect_module.check()
     if task is None:
         return False
@@ -157,8 +172,19 @@ def run_once(reflect_module, config: LLMConfig, call_llm_func=call_llm) -> bool:
     log_line(f"Reflect triggered, prompt {len(task)} chars")
 
     try:
-        result = call_llm_func(task, config)
+        llm_result = _coerce_llm_result(call_llm_func(task, config))
+        result = llm_result.content
         log_line(f"LLM completed, result {len(result)} chars")
+        if llm_result.usage:
+            from token_usage import DEFAULT_TOKEN_USAGE_FILE, record_token_usage
+
+            record_token_usage(
+                token_usage_path or DEFAULT_TOKEN_USAGE_FILE,
+                llm_result.usage,
+                pending=getattr(reflect_module, "_pending_data", None),
+                source="reply",
+                model=config.model,
+            )
     except Exception as exc:
         err_msg = str(exc)
         log_line(f"ERROR {type(exc).__name__}: {err_msg}")

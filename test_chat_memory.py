@@ -200,15 +200,19 @@ def test_llm_summary_disables_console_logging():
     from chat_memory import summarize_memory_with_llm
 
     captured = {}
-    original_call_llm = reply_worker.call_llm
+    original_call_llm = reply_worker.call_llm_with_usage
     original_load_llm_config = reply_worker.load_llm_config
 
     def fake_call_llm(prompt, config, log_func="not-none"):
         captured["log_func"] = log_func
-        return "摘要"
+        return reply_worker.LLMResult(
+            content="摘要",
+            usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            raw={},
+        )
 
     try:
-        reply_worker.call_llm = fake_call_llm
+        reply_worker.call_llm_with_usage = fake_call_llm
         reply_worker.load_llm_config = lambda: object()
 
         result = summarize_memory_with_llm(
@@ -217,11 +221,52 @@ def test_llm_summary_disables_console_logging():
             {"chat": "示例用户", "is_group": False},
         )
     finally:
-        reply_worker.call_llm = original_call_llm
+        reply_worker.call_llm_with_usage = original_call_llm
         reply_worker.load_llm_config = original_load_llm_config
 
     assert result == "摘要"
     assert captured["log_func"] is None
+
+def test_llm_summary_records_system_token_usage():
+    import json
+    import tempfile
+    from pathlib import Path
+
+    import reply_worker
+    import token_usage
+    from chat_memory import summarize_memory_with_llm
+
+    original_call_llm = reply_worker.call_llm_with_usage
+    original_load_llm_config = reply_worker.load_llm_config
+    original_usage_file = token_usage.DEFAULT_TOKEN_USAGE_FILE
+
+    with tempfile.TemporaryDirectory() as tmp:
+        token_usage.DEFAULT_TOKEN_USAGE_FILE = Path(tmp) / "token_usage.json"
+
+        def fake_call_llm(prompt, config, log_func=None):
+            return reply_worker.LLMResult(
+                content="摘要",
+                usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+                raw={},
+            )
+
+        try:
+            reply_worker.call_llm_with_usage = fake_call_llm
+            reply_worker.load_llm_config = lambda: type("Config", (), {"model": "deepseek-v4-flash"})()
+
+            summarize_memory_with_llm(
+                "",
+                [{"sender": "示例用户", "content": "你好", "time": "2026-05-18 02:00:00"}],
+                {"chat": "示例用户", "is_group": False},
+            )
+            data = json.loads(token_usage.DEFAULT_TOKEN_USAGE_FILE.read_text(encoding="utf-8"))
+        finally:
+            reply_worker.call_llm_with_usage = original_call_llm
+            reply_worker.load_llm_config = original_load_llm_config
+            token_usage.DEFAULT_TOKEN_USAGE_FILE = original_usage_file
+
+    assert data["total"]["total_tokens"] == 5
+    assert data["by_source"]["system.memory_summarize"]["total_tokens"] == 5
 
 def test_summarizes_overflow_before_trimming():
     from chat_memory import ChatMemoryStore
@@ -264,6 +309,7 @@ if __name__ == "__main__":
         test_update_memory_records_self_messages_as_assistant,
         test_replace_recent_memory_uses_database_snapshot_instead_of_appending,
         test_llm_summary_disables_console_logging,
+        test_llm_summary_records_system_token_usage,
         test_summarizes_overflow_before_trimming,
     ]
     for test in tests:

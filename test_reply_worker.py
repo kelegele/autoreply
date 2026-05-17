@@ -62,6 +62,26 @@ def test_call_llm_posts_openai_compatible_payload():
     assert captured["payload"]["temperature"] == 0.2
     assert captured["timeout"] == 9
 
+def test_call_llm_with_usage_returns_content_and_usage():
+    from reply_worker import LLMConfig, call_llm_with_usage
+
+    def fake_post(url, headers, payload, timeout):
+        return {
+            "choices": [{"message": {"content": "[]"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+
+    config = LLMConfig(
+        base_url="https://api.deepseek.com/v1",
+        api_key="test-key",
+        model="deepseek-v4-flash",
+    )
+
+    result = call_llm_with_usage("hello", config, post_json=fake_post, log_func=None)
+
+    assert result.content == "[]"
+    assert result.usage == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+
 
 def test_call_llm_logs_prompt_payload_and_raw_response_without_api_key():
     from reply_worker import LLMConfig, call_llm
@@ -120,6 +140,53 @@ def test_run_once_passes_reflect_prompt_to_llm_and_on_done():
         ("on_done", '[{"chat":"示例用户","content":"好","skip":false}]'),
     ]
 
+def test_run_once_records_token_usage_for_pending_chats():
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from reply_worker import LLMConfig, LLMResult, run_once
+
+    with tempfile.TemporaryDirectory() as tmp:
+        usage_path = Path(tmp) / "token_usage.json"
+
+        class FakeReflect:
+            _pending_data = {
+                "chats": [
+                    {
+                        "chat": "示例用户",
+                        "chat_hash": "abc123",
+                        "is_group": False,
+                        "messages": [{"sender": "示例用户", "content": "你好"}],
+                    }
+                ]
+            }
+
+            def check(self):
+                return "reply to this"
+
+            def on_done(self, result):
+                pass
+
+        def fake_call_llm(prompt, config):
+            return LLMResult(
+                content='[{"chat":"示例用户","content":"好","skip":false}]',
+                usage={"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
+                raw={},
+            )
+
+        config = LLMConfig(
+            base_url="https://api.deepseek.com/v1",
+            api_key="test-key",
+            model="deepseek-v4-flash",
+        )
+
+        assert run_once(FakeReflect(), config, call_llm_func=fake_call_llm, token_usage_path=usage_path) is True
+        data = json.loads(usage_path.read_text(encoding="utf-8"))
+
+    assert data["total"]["total_tokens"] == 12
+    assert data["by_chat"]["abc123"]["total_tokens"] == 12
+
 
 def test_run_once_does_nothing_when_no_task():
     from reply_worker import LLMConfig, run_once
@@ -138,8 +205,10 @@ if __name__ == "__main__":
         test_chat_completions_url_accepts_base_variants,
         test_load_llm_config_reads_environment,
         test_call_llm_posts_openai_compatible_payload,
+        test_call_llm_with_usage_returns_content_and_usage,
         test_call_llm_logs_prompt_payload_and_raw_response_without_api_key,
         test_run_once_passes_reflect_prompt_to_llm_and_on_done,
+        test_run_once_records_token_usage_for_pending_chats,
         test_run_once_does_nothing_when_no_task,
     ]
     for test in tests:
