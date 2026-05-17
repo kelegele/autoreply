@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+logs/
+state/
+exchange/
+db_export/
+_tmp_screenshot.png
+bot_test.log

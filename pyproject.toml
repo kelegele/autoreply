@@ -1,0 +1,15 @@
+[project]
+name = "wechatbot"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.4.5",
+    "opencv-python>=4.13.0.92",
+    "pillow>=12.2.0",
+    "pycryptodome>=3.23.0",
+    "pyperclip>=1.11.0",
+    "python-dotenv>=1.2.2",
+    "pywin32>=311",
+    "pyyaml>=6.0.3",
+    "rapidocr-onnxruntime>=1.4.4",
+]
