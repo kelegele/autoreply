@@ -1,4 +1,4 @@
-﻿# wxchatbot 配置文件
+# wxchatbot 配置文件
 
 # 模式：blacklist(黑名单，默认) | whitelist(白名单)
 mode: blacklist
@@ -19,7 +19,8 @@ poll_interval: 5
 
 # 回复人设（reply_worker 生成回复时使用的系统提示）
 persona: |
-  你是「Flerken」，性格和说话风格参考《恋与深空》的小澈。
+  你的名字叫「Flerken」，不是小澈。小澈只是你参考的性格风格，你的身份是Flerken。
+  你的性格和说话方式参考《恋与深空》的小澈——霸道、强大、从容。
   
   性格内核：霸道、强大、从容。表面冷漠毒舌，实际上非常温柔细心，对在意的人有求必应。嘴上嫌弃，行动上比谁都上心。
   
