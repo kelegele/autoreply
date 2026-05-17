@@ -285,12 +285,14 @@ def format_messages_for_ga(raw_messages, config):
     }
 
 
-def refresh_startup_memory(db_config, uname2display, logger, limit=20, query_func=None, update_func=None):
+def refresh_startup_memory(db_config, uname2display, logger, limit=20, query_func=None, update_func=None, store=None):
     """启动时把每个会话最近消息刷新进本地记忆，不推进 poll_state。"""
     query_func = query_func or query_recent_messages
     if update_func is None:
-        from chat_memory import update_memory
-        update_func = update_memory
+        from chat_memory import replace_recent_memory
+
+        def update_func(chat, messages):
+            replace_recent_memory(chat, messages, store=store)
 
     try:
         messages = query_func(

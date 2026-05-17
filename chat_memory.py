@@ -168,6 +168,28 @@ def update_memory(chat_ref, messages, reply=None, is_group=False, chat_name=None
     memory["recent_messages"] = recent
     store.save(chat, memory)
 
+def replace_recent_memory(chat_ref, messages, is_group=False, chat_name=None, store: ChatMemoryStore | None = None):
+    """Use a database snapshot as the current recent memory for one chat."""
+    store = store or ChatMemoryStore()
+    chat = _chat_from_ref(chat_ref, messages, is_group=is_group, chat_name=chat_name)
+    memory = store.load(chat)
+    memory["summary"] = ""
+    recent = []
+    seen = set()
+
+    for message in messages or []:
+        entry = _message_to_memory_entry(message)
+        if entry is None:
+            continue
+        fingerprint = _message_fingerprint(entry)
+        if fingerprint in seen:
+            continue
+        recent.append(entry)
+        seen.add(fingerprint)
+
+    memory["recent_messages"] = recent[-store.max_recent :]
+    store.save(chat, memory, summarize_fn=lambda summary, overflow, chat: summary)
+
 def _format_messages_for_summary(messages: list[dict]) -> str:
     lines = []
     for item in messages:
@@ -209,7 +231,7 @@ def summarize_memory_with_llm(existing_summary: str, messages: list[dict], chat:
 {_format_messages_for_summary(messages)}
 
 更新后的长期摘要:"""
-    return call_llm(prompt, load_llm_config()).strip()
+    return call_llm(prompt, load_llm_config(), log_func=None).strip()
 
 
 def enrich_pending_with_memory(pending: dict, store: ChatMemoryStore | None = None) -> dict:

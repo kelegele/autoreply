@@ -166,6 +166,63 @@ def test_update_memory_records_self_messages_as_assistant():
     assert memory["recent_messages"][0]["role"] == "assistant"
     assert memory["recent_messages"][0]["sender"] == "bot"
 
+def test_replace_recent_memory_uses_database_snapshot_instead_of_appending():
+    from chat_memory import ChatMemoryStore, replace_recent_memory
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChatMemoryStore(Path(tmp))
+        chat = {"chat": "示例用户", "chat_hash": "abc123", "is_group": False}
+        memory = store.load(chat)
+        memory["summary"] = "保留长期摘要"
+        memory["recent_messages"] = [
+            {"role": "user", "sender": "示例用户", "content": "旧缓存消息", "time": "old"}
+        ]
+        store.save(chat, memory)
+
+        replace_recent_memory(
+            chat,
+            [
+                {
+                    "sender": "示例用户",
+                    "content": "DB 最新消息",
+                    "timestamp": "2026-05-18 02:00:00",
+                }
+            ],
+            store=store,
+        )
+        reloaded = store.load(chat)
+
+    assert reloaded["summary"] == ""
+    assert [m["content"] for m in reloaded["recent_messages"]] == ["DB 最新消息"]
+
+def test_llm_summary_disables_console_logging():
+    import reply_worker
+    from chat_memory import summarize_memory_with_llm
+
+    captured = {}
+    original_call_llm = reply_worker.call_llm
+    original_load_llm_config = reply_worker.load_llm_config
+
+    def fake_call_llm(prompt, config, log_func="not-none"):
+        captured["log_func"] = log_func
+        return "摘要"
+
+    try:
+        reply_worker.call_llm = fake_call_llm
+        reply_worker.load_llm_config = lambda: object()
+
+        result = summarize_memory_with_llm(
+            "",
+            [{"sender": "示例用户", "content": "你好", "time": "2026-05-18 02:00:00"}],
+            {"chat": "示例用户", "is_group": False},
+        )
+    finally:
+        reply_worker.call_llm = original_call_llm
+        reply_worker.load_llm_config = original_load_llm_config
+
+    assert result == "摘要"
+    assert captured["log_func"] is None
+
 def test_summarizes_overflow_before_trimming():
     from chat_memory import ChatMemoryStore
 
@@ -205,6 +262,8 @@ if __name__ == "__main__":
         test_default_store_keeps_latest_50_messages,
         test_update_memory_records_skipped_chat_messages_without_reply,
         test_update_memory_records_self_messages_as_assistant,
+        test_replace_recent_memory_uses_database_snapshot_instead_of_appending,
+        test_llm_summary_disables_console_logging,
         test_summarizes_overflow_before_trimming,
     ]
     for test in tests:
