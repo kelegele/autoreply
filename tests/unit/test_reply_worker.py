@@ -219,6 +219,32 @@ def test_call_llm_with_usage_returns_content_and_usage():
     assert result.content == "[]"
     assert result.usage == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
 
+def test_call_llm_raises_on_truncated_length_finish():
+    from reply_worker import LLMConfig, call_llm_with_usage
+
+    def fake_post(url, headers, payload, timeout):
+        return {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {"content": '{"replies":'},
+                }
+            ]
+        }
+
+    config = LLMConfig(
+        base_url="https://api.deepseek.com/v1",
+        api_key="test-key",
+        model="deepseek-v4-flash",
+    )
+
+    try:
+        call_llm_with_usage("hello", config, post_json=fake_post, log_func=None)
+    except RuntimeError as exc:
+        assert "finish_reason=length" in str(exc)
+    else:
+        raise AssertionError("Expected RuntimeError for truncated LLM response")
+
 
 def test_call_llm_logs_prompt_payload_and_raw_response_without_api_key():
     from reply_worker import LLMConfig, call_llm
@@ -349,6 +375,7 @@ if __name__ == "__main__":
         test_call_llm_payload_omits_deepseek_only_options_for_compatible_provider,
         test_call_llm_accepts_structured_messages,
         test_call_llm_with_usage_returns_content_and_usage,
+        test_call_llm_raises_on_truncated_length_finish,
         test_call_llm_logs_prompt_payload_and_raw_response_without_api_key,
         test_run_once_passes_reflect_prompt_to_llm_and_on_done,
         test_run_once_records_token_usage_for_pending_chats,
