@@ -545,11 +545,33 @@ class WxChatBot:
             self.logger.info(f"  📤 准备发送回复到 [{'群' if is_group else '私'}聊:{chat}{hash_suffix}]{' @'+sender if at_name else ''}: {content[:50]}...")
             
             success = send_to(chat, content, at_name=at_name)
+            reply["_send_success"] = success
             if success:
                 self.stats["replies_sent"] += 1
                 self.logger.info(f"  ✅ 已发送回复到 [{chat}]")
             else:
                 self.logger.warning(f"  ⏭️ 未发送 [{chat}]: OCR未在聊天列表中找到该联系人，跳过")
+
+        # 发送完成后更新会话记忆（无论成败都记录）
+        self._update_memory_after_send(replies)
+
+    def _update_memory_after_send(self, replies):
+        meta_path = self.exchange.exchange_dir / "pending_meta.json"
+        if not meta_path.exists():
+            return
+        try:
+            import json
+            with open(meta_path, "r", encoding="utf-8") as f:
+                pending_data = json.load(f)
+            from chat_memory import update_memory_after_replies
+            update_memory_after_replies(pending_data, replies)
+            self.logger.info("  🧠 会话记忆已更新")
+        except Exception as e:
+            self.logger.debug(f"  ⚠️ 更新记忆跳过: {e}")
+        try:
+            meta_path.unlink()
+        except Exception:
+            pass
 
     def _update_poll_status(self, poll_no, dot_count=0):
         ts = datetime.now().strftime('%H:%M:%S')

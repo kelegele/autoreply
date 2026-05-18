@@ -343,13 +343,14 @@ def on_done(result):
         _log("⚠️ 未能从 LLM 输出中提取有效回复")
         return
 
-    try:
-        from chat_memory import update_memory_after_replies
-        if _pending_data:
-            update_memory_after_replies(_pending_data, replies)
-            _log("🧠 会话记忆已更新")
-    except Exception as e:
-        _log(f"⚠️ 更新会话记忆失败: {e}")
+    # 写 pending_meta.json 供 bot.py 在发送成功后更新记忆
+    if _pending_data:
+        try:
+            meta_path = EXCHANGE_DIR / "pending_meta.json"
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(_pending_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            _log(f"⚠️ 写入 pending_meta.json 失败: {e}")
     
     # 过滤掉 skip=true 的
     valid_replies = [r for r in replies if not r.get('skip', False)]

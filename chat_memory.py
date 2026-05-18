@@ -321,11 +321,16 @@ def update_memory(chat_ref, messages, reply=None, is_group=False, chat_name=None
         _append_daily_message(memory, chat, entry, user_memory_path=store.user_memory_path)
 
     if reply and str(reply.get("content", "")).strip():
+        content = str(reply.get("content", "")).strip()
+        if "_send_success" in reply:
+            status = "已发送" if reply["_send_success"] else "未成功发送"
+            content = f"[{status}] {content}"
         entry = {
             "role": "assistant",
             "sender": "bot",
-            "content": str(reply.get("content", "")).strip(),
+            "content": content,
             "time": _now_iso(),
+            "send_success": reply.get("_send_success"),
         }
         fingerprint = _message_fingerprint(entry)
         if fingerprint not in seen:
