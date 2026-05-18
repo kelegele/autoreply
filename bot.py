@@ -427,6 +427,55 @@ class WxChatBot:
                 hash_short = chat_hash[:4] + ".." + chat_hash[-4:] if len(chat_hash) > 12 else chat_hash
                 self.logger.info(f"  [{type_label}] {chat_display} [{hash_short}] · 最后一条是自己发的，跳过")
         
+        # 群聊随机插话：查记忆，统计最近bot回复后的消息数/活跃时间
+        from chat_memory import ChatMemoryStore
+        store = ChatMemoryStore()
+        random_reply_chats = set()
+        now_ts = datetime.now()
+        for chat_name, msgs in by_chat.items():
+            first = msgs[0]
+            if not first.get("is_group"):
+                continue
+            if chat_name in chats_already_replied:
+                continue
+            non_self = [m for m in msgs if not m.get("is_self")]
+            if not non_self:
+                continue
+            # 查记忆里最后一条bot消息的时间
+            try:
+                mem = store.load({"chat": chat_name, "chat_hash": first.get("chat_hash", chat_name), "is_group": True})
+                recent = mem.get("recent_messages", [])
+                last_bot_ts = None
+                for entry in reversed(recent):
+                    if entry.get("role") == "assistant":
+                        last_bot_ts = entry.get("time", "")
+                        break
+                # 统计bot之后的用户消息数/时间
+                msgs_after_bot = 0
+                latest_user_ts = None
+                for entry in recent:
+                    if entry.get("role") == "user" and (not last_bot_ts or entry.get("time", "") > last_bot_ts):
+                        msgs_after_bot += 1
+                        latest_user_ts = entry.get("time", "")
+                # 加上本轮新消息
+                msgs_after_bot += len(non_self)
+                if non_self:
+                    latest_user_ts = non_self[-1].get("timestamp", "") or latest_user_ts
+                # 计算最近活跃时间
+                minutes_active = 0
+                if latest_user_ts:
+                    try:
+                        dt = datetime.strptime(latest_user_ts[:19], "%Y-%m-%d %H:%M:%S")
+                        minutes_active = (now_ts - dt).total_seconds() / 60
+                    except Exception:
+                        pass
+            except Exception:
+                msgs_after_bot = len(non_self)
+                minutes_active = 0
+            if msgs_after_bot >= 10 or (msgs_after_bot >= 3 and minutes_active >= 30):
+                random_reply_chats.add(chat_name)
+                self.logger.info(f"  💬 随机插话 [{chat_name}]: bot后{msgs_after_bot}条, {minutes_active:.0f}分钟活跃")
+
         # 黑白名单过滤 + 去掉is_self消息 + 去掉已回复会话
         filtered = []
         for msg in raw_msgs:
@@ -435,6 +484,9 @@ class WxChatBot:
             chat_display = msg['chat_name']
             if chat_display in chats_already_replied:
                 continue  # 已回复过的会话跳过
+            if chat_display in random_reply_chats:
+                filtered.append(msg)
+                continue
             if should_reply(chat_display, self.config):
                 filtered.append(msg)
             else:
@@ -614,6 +666,102 @@ class WxChatBot:
         signal.signal(signal.SIGINT, _signal_handler)
         signal.signal(signal.SIGTERM, _signal_handler)
         
+        # --- 启动扫漏：用 query_recent_messages 查最近消息，静默更新记忆，只打印待回复 ---
+        self.logger.info("🔍 启动扫漏中...")
+        try:
+            raw_msgs = query_recent_messages(
+                self.db_config.msg_db_path,
+                self.db_config.msg_key_bytes,
+                self.db_config.my_wxid,
+                self.uname2display,
+                limit_per_chat=50,
+                timeout=self.config.get("db", {}).get("decrypt_timeout", 15),
+                max_retries=self.config.get("db", {}).get("decrypt_max_retries", 3),
+                my_display_name=self.db_config.my_display_name,
+            )
+        except Exception as e:
+            self.logger.warning(f"启动扫漏查询失败: {e}")
+            raw_msgs = []
+
+        if raw_msgs:
+            from collections import defaultdict
+            by_chat = defaultdict(list)
+            for msg in raw_msgs:
+                by_chat[msg["chat_name"]].append(msg)
+
+            # 静默更新记忆
+            try:
+                from chat_memory import update_memory
+                for chat_name, msgs in by_chat.items():
+                    non_self = [m for m in msgs if not m.get("is_self")]
+                    if non_self:
+                        first = non_self[0]
+                        update_memory(
+                            {"chat": first.get("chat_name", chat_name),
+                             "chat_hash": first.get("chat_hash", chat_name),
+                             "is_group": first.get("is_group", False)},
+                            non_self,
+                        )
+            except Exception:
+                pass
+
+            # 筛选待回复：按时间排序后，找最新一条 is_self，只取它之后的消息
+            pending_chats = []
+            for chat_name, msgs in by_chat.items():
+                is_group = msgs[0].get("is_group", False)
+                # 按时间排序（早→晚），找最新的 is_self
+                sorted_msgs = sorted(msgs, key=lambda m: m.get("timestamp", ""))
+                last_self_idx = -1
+                for idx, m in enumerate(sorted_msgs):
+                    if m.get("is_self"):
+                        last_self_idx = idx
+                # 只取 is_self 之后的消息
+                unhandled = sorted_msgs[last_self_idx + 1:] if last_self_idx >= 0 else sorted_msgs
+                if not unhandled:
+                    continue
+                needs_reply = True
+                if is_group:
+                    has_at = any(m.get("is_at") for m in unhandled)
+                    if not has_at:
+                        needs_reply = False
+                if needs_reply:
+                    type_label = "群聊" if is_group else "私聊"
+                    first = unhandled[0]
+                    ch = first.get("chat_hash", chat_name)
+                    hash_short = ch[:4] + ".." + ch[-4:] if len(ch) > 12 else ch
+                    self.logger.info(f"  📬 [{type_label}] {chat_name} [{hash_short}] · {len(unhandled)}条")
+                    for m in unhandled:
+                        sender = m.get("sender", "?")
+                        cp = m["content"][:50] + ("..." if len(m["content"]) > 50 else "")
+                        at_mark = " @我" if m.get("is_at") else ""
+                        self.logger.info(f"    {sender}{at_mark}: {cp}")
+                    pending_chats.append({
+                        "chat": chat_name,
+                        "chat_hash": first.get("chat_hash", ""),
+                        "is_group": is_group,
+                        "messages": [
+                            {"sender": m["sender"], "sender_wxid": m.get("sender_wxid", ""),
+                             "content": m["content"], "is_at": m.get("is_at", False),
+                             "timestamp": m.get("timestamp", "")}
+                            for m in unhandled
+                        ],
+                        "needs_reply": True,
+                    })
+
+            if pending_chats:
+                ga_data = {
+                    "persona": self.config.get("persona", ""),
+                    "reply_mode": self.config.get("reply_mode", "persona"),
+                    "chats": pending_chats,
+                }
+                self.exchange.write_pending({"chats": pending_chats, "persona": ga_data.get("persona", "")})
+                self.logger.info(f"  ✅ pending.json 已写入 {len(pending_chats)} 个会话")
+            else:
+                self.logger.info("  ✅ 无待回复消息")
+        else:
+            self.logger.info("  ✅ 无新消息")
+        self.logger.info("✅ 启动扫漏完成")
+
         self.logger.info("🔄 开始轮询主循环...")
         self.logger.info(f"  poll_interval={self.poll_interval}s")
         self.logger.info(f"  DB路径: {self.db_config.msg_db_path}")

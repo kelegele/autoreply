@@ -51,6 +51,10 @@
 
 当前 checkout 没有 Git 历史可参考。提交信息使用简短祈使句，例如 `Fix chat type detection` 或 `Add sender retry logging`。PR 需说明目的、配置变更、执行过的命令及结果；涉及 UI 自动化时附截图或关键日志，并注明是否跳过真实微信测试。
 
+## 编辑规则
+
+- **先测试再重启**：任何 `.py` 脚本新增或修改后，必须先跑对应测试或至少 `py_compile`，确认通过后才能重启。不允许不测就重启。
+
 ## 经验教训（Agent 编辑注意事项）
 
 - **补丁回退**：`apply_patch` 在 Windows CRLF 下经常匹配失败。如果补丁不生效，改用 Python 脚本直接读/写文件：`Set-Content` 写临时 `.py` → `uv run python` 执行 → `Remove-Item` 清理。

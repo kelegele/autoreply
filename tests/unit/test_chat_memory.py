@@ -422,16 +422,16 @@ def test_summarizes_overflow_before_trimming():
         memory["summary"] = "旧摘要"
         memory["recent_messages"] = [
             {"role": "user", "sender": "示例用户", "content": f"消息{i}", "time": "t"}
-            for i in range(52)
+            for i in range(105)
         ]
 
         store.save(chat, memory)
         reloaded = store.load(chat)
 
-    assert calls == [("旧摘要", ["消息0", "消息1"], "示例用户")]
+    assert calls == [("旧摘要", ["消息0", "消息1", "消息2", "消息3", "消息4"], "示例用户")]
     assert reloaded["summary"] == "旧摘要 + 前2条"
-    assert len(reloaded["recent_messages"]) == 50
-    assert reloaded["recent_messages"][0]["content"] == "消息2"
+    assert len(reloaded["recent_messages"]) == 100
+    assert reloaded["recent_messages"][0]["content"] == "消息5"
 
 
 if __name__ == "__main__":

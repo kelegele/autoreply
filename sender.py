@@ -150,6 +150,17 @@ def _fuzzy_text_match(text, target, threshold=0.65):
     score = SequenceMatcher(None, text_norm, target_norm).ratio()
     return score >= threshold, score
 
+def _is_green_selected(img, cx, cy):
+    """Check if pixel at OCR position (cx,cy) is green-ish (WeChat selected chat color)."""
+    try:
+        x, y = int(cx), int(cy)
+        if x < 0 or y < 0 or x >= img.size[0] or y >= img.size[1]:
+            return False
+        r, g, b = img.getpixel((x, y))[:3]
+        return g > 150 and g > r * 1.15 and g > b * 1.05
+    except Exception:
+        return False
+
 def find_text(details, target, exact=True, x_min=None, x_max=None, y_min=None, y_max=None):
     """在OCR结果中查找文本，返回 [{'text','cx','cy'}, ...]"""
     matches = []
@@ -244,7 +255,13 @@ def send_to(target_name, msg, max_retries=5, at_name=None):
             target = min(list_hits, key=lambda m: m['cy'])
             log_line(f'  📋 列表找到: "{target["text"]}" at ({target["cx"]:.0f},{target["cy"]:.0f})')
 
-            # 点击导航
+            # ── 绿色检测：列表项背景偏绿=已选中=已在目标聊天 ──
+            if _is_green_selected(img, target['cx'], target['cy']):
+                log_line(f'  🟩 列表项已选中（绿色），直接发送')
+                _do_send(hwnd, msg, at_name=at_name)
+                return True
+
+            # 未选中 → 点击导航
             click_at(hwnd, target['cx'], target['cy'])
             time.sleep(0.6)
 
