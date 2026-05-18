@@ -144,7 +144,7 @@ def _output_format_block():
     return """## 输出格式（必须严格遵循）
 直接输出JSON，不要有其他内容：
 ```json
-{{"replies": [
+{"replies": [
   {{"chat": "会话名", "content": "回复内容", "is_group": false, "sender": "对方昵称", "skip": false}},
   {{"chat": "群名", "content": "回复内容", "is_group": true, "sender": "说话的人", "skip": false}},
   {{"chat": "不需要回复的会话", "content": "", "is_group": false, "sender": "", "skip": true}}
