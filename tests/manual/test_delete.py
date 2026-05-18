@@ -1,4 +1,5 @@
 """测试右键「不显示」流程：右键→不显示→我知道了"""
+import _path  # noqa: F401
 import ctypes
 ctypes.windll.user32.SetProcessDPIAware()
 import time

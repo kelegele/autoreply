@@ -1,3 +1,5 @@
+import _path  # noqa: F401
+
 def test_format_messages_preserves_message_timestamp():
     from bot import format_messages_for_ga
 

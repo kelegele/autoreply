@@ -1,3 +1,5 @@
+import _path  # noqa: F401
+
 def test_refresh_startup_memory_loads_recent_messages_per_chat():
     import bot
 
@@ -86,7 +88,7 @@ def test_refresh_startup_memory_replaces_recent_from_database():
         store = ChatMemoryStore(Path(tmp))
         chat = {"chat": "示例用户", "chat_hash": "abc123", "is_group": False}
         memory = store.load(chat)
-        memory["summary"] = "旧摘要不应该继续使用"
+        memory["summary"] = "长期：示例用户关注机器人记忆能力。"
         memory["recent_messages"] = [
             {"role": "user", "sender": "示例用户", "content": "旧轮询缓存", "time": "old"}
         ]
@@ -101,8 +103,9 @@ def test_refresh_startup_memory_replaces_recent_from_database():
         )
         reloaded = store.load(chat)
 
-    assert reloaded["summary"] == ""
+    assert reloaded["summary"] == "长期：示例用户关注机器人记忆能力。"
     assert [m["content"] for m in reloaded["recent_messages"]] == ["DB 最近消息"]
+    assert reloaded["daily"]["2026-05-18"]["by_user"]["示例用户"]["messages"][0]["content"] == "DB 最近消息"
 
 if __name__ == "__main__":
     tests = [

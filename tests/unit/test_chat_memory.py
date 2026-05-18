@@ -1,3 +1,5 @@
+import _path  # noqa: F401
+
 import tempfile
 from pathlib import Path
 
@@ -192,8 +194,144 @@ def test_replace_recent_memory_uses_database_snapshot_instead_of_appending():
         )
         reloaded = store.load(chat)
 
-    assert reloaded["summary"] == ""
+    assert reloaded["summary"] == "保留长期摘要"
     assert [m["content"] for m in reloaded["recent_messages"]] == ["DB 最新消息"]
+
+def test_update_memory_indexes_daily_messages_by_user_and_chat():
+    from chat_memory import ChatMemoryStore, update_memory
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChatMemoryStore(Path(tmp))
+        chat = {"chat": "测试群", "chat_hash": "group123", "is_group": True}
+
+        update_memory(
+            chat,
+            [
+                {
+                    "local_id": 1,
+                    "sender": "示例用户",
+                    "sender_wxid": "wxid_f",
+                    "content": "今天我想让大模型记住聊天",
+                    "timestamp": "2026-05-18 10:00:00",
+                },
+                {
+                    "local_id": 2,
+                    "sender": "纯粹",
+                    "sender_wxid": "wxid_c",
+                    "content": "论文查重还没过",
+                    "timestamp": "2026-05-18 10:01:00",
+                },
+            ],
+            store=store,
+        )
+        memory = store.load(chat)
+
+    day = memory["daily"]["2026-05-18"]
+    assert day["chat"] == "测试群"
+    assert day["by_user"]["wxid_f"]["name"] == "示例用户"
+    assert day["by_user"]["wxid_f"]["message_count"] == 1
+    assert day["by_user"]["wxid_f"]["messages"][0]["content"] == "今天我想让大模型记住聊天"
+    assert day["by_user"]["wxid_c"]["messages"][0]["content"] == "论文查重还没过"
+
+def test_update_memory_indexes_global_user_daily_memory_across_chats():
+    import json
+    from chat_memory import ChatMemoryStore, update_memory
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChatMemoryStore(Path(tmp), user_memory_path=Path(tmp) / "user_memory.json")
+        update_memory(
+            {"chat": "群A", "chat_hash": "group_a", "is_group": True},
+            [
+                {
+                    "local_id": 1,
+                    "sender": "示例用户",
+                    "sender_wxid": "wxid_f",
+                    "content": "我在群A说了记忆",
+                    "timestamp": "2026-05-18 10:00:00",
+                }
+            ],
+            store=store,
+        )
+        update_memory(
+            {"chat": "示例用户", "chat_hash": "private_f", "is_group": False},
+            [
+                {
+                    "local_id": 2,
+                    "sender": "示例用户",
+                    "sender_wxid": "wxid_f",
+                    "content": "我在私聊问了模型",
+                    "timestamp": "2026-05-18 11:00:00",
+                }
+            ],
+            store=store,
+        )
+        data = json.loads((Path(tmp) / "user_memory.json").read_text(encoding="utf-8"))
+
+    user = data["daily"]["2026-05-18"]["by_user"]["wxid_f"]
+    assert user["name"] == "示例用户"
+    assert user["chats"]["group_a"]["messages"][0]["content"] == "我在群A说了记忆"
+    assert user["chats"]["private_f"]["messages"][0]["content"] == "我在私聊问了模型"
+
+def test_enrich_pending_adds_current_senders_global_daily_memory():
+    from chat_memory import ChatMemoryStore, enrich_pending_with_memory, update_memory
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChatMemoryStore(Path(tmp), user_memory_path=Path(tmp) / "user_memory.json")
+        update_memory(
+            {"chat": "群A", "chat_hash": "group_a", "is_group": True},
+            [
+                {
+                    "local_id": 1,
+                    "sender": "示例用户",
+                    "sender_wxid": "wxid_f",
+                    "content": "我在群A说了记忆",
+                    "timestamp": "2026-05-18 10:00:00",
+                }
+            ],
+            store=store,
+        )
+        pending = {
+            "chats": [
+                {
+                    "chat": "示例用户",
+                    "chat_hash": "private_f",
+                    "is_group": False,
+                    "messages": [{"sender": "示例用户", "sender_wxid": "wxid_f", "content": "我今天说了什么？"}],
+                }
+            ]
+        }
+        enriched = enrich_pending_with_memory(pending, store)
+
+    user_memory = enriched["chats"][0]["user_daily_memory"]["2026-05-18"]["by_user"]["wxid_f"]
+    assert user_memory["chats"]["group_a"]["messages"][0]["content"] == "我在群A说了记忆"
+
+def test_replace_recent_memory_preserves_long_term_and_updates_daily_index():
+    from chat_memory import ChatMemoryStore, replace_recent_memory
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChatMemoryStore(Path(tmp))
+        chat = {"chat": "示例用户", "chat_hash": "abc123", "is_group": False}
+        memory = store.load(chat)
+        memory["summary"] = "长期：示例用户关注记忆能力。"
+        store.save(chat, memory)
+
+        replace_recent_memory(
+            chat,
+            [
+                {
+                    "local_id": 10,
+                    "sender": "示例用户",
+                    "sender_wxid": "wxid_f",
+                    "content": "今天问了记忆怎么改造",
+                    "timestamp": "2026-05-18 12:00:00",
+                }
+            ],
+            store=store,
+        )
+        reloaded = store.load(chat)
+
+    assert reloaded["summary"] == "长期：示例用户关注记忆能力。"
+    assert reloaded["daily"]["2026-05-18"]["by_user"]["wxid_f"]["messages"][0]["content"] == "今天问了记忆怎么改造"
 
 def test_llm_summary_disables_console_logging():
     import reply_worker
@@ -308,6 +446,10 @@ if __name__ == "__main__":
         test_update_memory_records_skipped_chat_messages_without_reply,
         test_update_memory_records_self_messages_as_assistant,
         test_replace_recent_memory_uses_database_snapshot_instead_of_appending,
+        test_update_memory_indexes_daily_messages_by_user_and_chat,
+        test_update_memory_indexes_global_user_daily_memory_across_chats,
+        test_enrich_pending_adds_current_senders_global_daily_memory,
+        test_replace_recent_memory_preserves_long_term_and_updates_daily_index,
         test_llm_summary_disables_console_logging,
         test_llm_summary_records_system_token_usage,
         test_summarizes_overflow_before_trimming,

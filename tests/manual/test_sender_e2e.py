@@ -1,7 +1,8 @@
-﻿"""
+"""
 wxchatbot sender 端到端测试 v2 - 直接点击聊天列表
 不再搜索，直接从左侧聊天列表找目标联系人点击
 """
+import _path  # noqa: F401
 import ctypes
 ctypes.windll.user32.SetProcessDPIAware()
 

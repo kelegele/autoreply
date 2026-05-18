@@ -1,4 +1,5 @@
 """调试：看确认弹窗OCR识别了什么文字"""
+import _path  # noqa: F401
 import ctypes
 ctypes.windll.user32.SetProcessDPIAware()
 import time

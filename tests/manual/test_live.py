@@ -1,10 +1,11 @@
 """一次性测试：初始化bot，跑一轮真实poll，看能否读到消息"""
-import sys, json
+import _path  # noqa: F401
+import json
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-
 from bot import load_config, FileExchange, WxChatBot
+
+ROOT = Path(__file__).resolve().parent.parent
 
 # 1. 加载配置
 cfg = load_config()
@@ -24,7 +25,7 @@ print(f"\n[3] Running one poll cycle...")
 bot._poll_once()
 
 # 4. 检查pending
-exchange_dir = Path(__file__).parent / "exchange"
+exchange_dir = ROOT / "exchange"
 pending_path = exchange_dir / "pending.json"
 if pending_path.exists():
     data = json.loads(pending_path.read_text(encoding='utf-8'))
@@ -38,7 +39,7 @@ else:
     print(f"    ℹ️ No new messages (pending.json not created)")
 
 # 5. 检查poll_state
-state_path = Path(__file__).parent / "state" / "poll_state.json"
+state_path = ROOT / "state" / "poll_state.json"
 if state_path.exists():
     state = json.loads(state_path.read_text(encoding='utf-8'))
     print(f"\n[4] poll_state: last_server_id={state.get('last_server_id')}")

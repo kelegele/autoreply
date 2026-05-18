@@ -263,12 +263,14 @@ def format_messages_for_ga(raw_messages, config):
         
         chat_msgs = []
         for m in msgs:
+            message_time = m.get('timestamp') or m.get('time', '')
             chat_msgs.append({
                 "sender": m['sender'],
                 "sender_wxid": m.get('sender_wxid', ''),
                 "content": m['content'],
                 "is_at": m.get('is_at', False),
-                "timestamp": m.get('timestamp', '')
+                "time": message_time,
+                "timestamp": message_time
             })
         
         results.append({
@@ -498,7 +500,11 @@ class WxChatBot:
         # 写pending.json（只写needs_reply=True的会话）
         reply_chats = [c for c in ga_data["chats"] if c.get("needs_reply", True)]
         if reply_chats:
-            self.exchange.write_pending({"chats": reply_chats, "persona": ga_data.get("persona", "")})
+            self.exchange.write_pending({
+                "chats": reply_chats,
+                "persona": ga_data.get("persona", ""),
+                "reply_mode": ga_data.get("reply_mode", "persona"),
+            })
             self.logger.info(f"  pending.json 已写入 {len(reply_chats)} 个会话，等待 reply_worker")
         else:
             self.logger.info("  所有会话已回复/无需回复，不写 pending")

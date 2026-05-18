@@ -1,3 +1,5 @@
+import _path  # noqa: F401
+
 import json
 import os
 import tempfile
@@ -31,6 +33,65 @@ def test_load_llm_config_reads_environment():
     assert config.timeout == 7
     assert config.temperature == 0.3
 
+def test_load_llm_config_reads_deepseek_options():
+    from reply_worker import load_llm_config
+
+    env = {
+        "LLM_PROVIDER": "deepseek",
+        "LLM_BASE_URL": "https://api.deepseek.com/v1",
+        "LLM_API_KEY": "test-key",
+        "LLM_MODEL": "deepseek-v4-flash",
+        "LLM_MAX_TOKENS": "1200",
+        "LLM_THINKING": "enabled",
+        "LLM_REASONING_EFFORT": "high",
+        "LLM_RESPONSE_FORMAT": "json_object",
+    }
+
+    config = load_llm_config(env)
+
+    assert config.provider == "deepseek"
+    assert config.max_tokens == 1200
+    assert config.thinking == "enabled"
+    assert config.reasoning_effort == "high"
+    assert config.response_format == "json_object"
+
+def test_load_llm_config_infers_provider_from_base_url():
+    from reply_worker import load_llm_config
+
+    deepseek = load_llm_config(
+        {
+            "LLM_BASE_URL": "https://api.deepseek.com",
+            "LLM_API_KEY": "test-key",
+            "LLM_MODEL": "deepseek-v4-flash",
+        }
+    )
+    compatible = load_llm_config(
+        {
+            "LLM_BASE_URL": "https://example.com/openai",
+            "LLM_API_KEY": "test-key",
+            "LLM_MODEL": "some-model",
+        }
+    )
+
+    assert deepseek.provider == "deepseek"
+    assert compatible.provider == "openai_compatible"
+
+def test_load_llm_config_normalizes_provider_aliases():
+    from reply_worker import load_llm_config
+
+    config = load_llm_config(
+        {
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_BASE_URL": "https://example.com/openai",
+            "LLM_API_KEY": "test-key",
+            "LLM_MODEL": "some-model",
+            "LLM_THINKING": "enabled",
+        }
+    )
+
+    assert config.provider == "openai_compatible"
+    assert config.thinking == "enabled"
+
 
 def test_call_llm_posts_openai_compatible_payload():
     from reply_worker import LLMConfig, call_llm
@@ -61,6 +122,82 @@ def test_call_llm_posts_openai_compatible_payload():
     assert captured["payload"]["messages"] == [{"role": "user", "content": "hello"}]
     assert captured["payload"]["temperature"] == 0.2
     assert captured["timeout"] == 9
+
+def test_call_llm_payload_includes_deepseek_options_only_for_deepseek():
+    from reply_worker import LLMConfig, call_llm
+
+    captured = {}
+
+    def fake_post(url, headers, payload, timeout):
+        captured["payload"] = payload
+        return {"choices": [{"message": {"content": "[]"}}]}
+
+    config = LLMConfig(
+        base_url="https://api.deepseek.com/v1",
+        api_key="test-key",
+        model="deepseek-v4-flash",
+        provider="deepseek",
+        max_tokens=1200,
+        thinking="enabled",
+        reasoning_effort="high",
+        response_format="json_object",
+    )
+
+    call_llm("hello", config, post_json=fake_post, log_func=None)
+
+    assert captured["payload"]["max_tokens"] == 1200
+    assert captured["payload"]["thinking"] == {"type": "enabled"}
+    assert captured["payload"]["reasoning_effort"] == "high"
+    assert captured["payload"]["response_format"] == {"type": "json_object"}
+
+def test_call_llm_payload_omits_deepseek_only_options_for_compatible_provider():
+    from reply_worker import LLMConfig, call_llm
+
+    captured = {}
+    logs = []
+
+    def fake_post(url, headers, payload, timeout):
+        captured["payload"] = payload
+        return {"choices": [{"message": {"content": "[]"}}]}
+
+    config = LLMConfig(
+        base_url="https://example.com/v1",
+        api_key="secret-key",
+        model="compatible-model",
+        provider="openai_compatible",
+        max_tokens=1200,
+        thinking="enabled",
+        reasoning_effort="high",
+        response_format="json_object",
+    )
+
+    call_llm("hello", config, post_json=fake_post, log_func=logs.append)
+
+    assert captured["payload"]["max_tokens"] == 1200
+    assert captured["payload"]["response_format"] == {"type": "json_object"}
+    assert "thinking" not in captured["payload"]
+    assert "reasoning_effort" not in captured["payload"]
+    assert "Ignoring DeepSeek-only option LLM_THINKING" in "\n".join(logs)
+    assert "secret-key" not in "\n".join(logs)
+
+def test_call_llm_accepts_structured_messages():
+    from reply_worker import LLMConfig, call_llm
+
+    captured = {}
+
+    def fake_post(url, headers, payload, timeout):
+        captured["payload"] = payload
+        return {"choices": [{"message": {"content": "[]"}}]}
+
+    messages = [
+        {"role": "system", "content": "规则"},
+        {"role": "user", "content": "你好"},
+    ]
+    config = LLMConfig(base_url="https://api.deepseek.com/v1", api_key="test-key", model="deepseek-v4-flash")
+
+    call_llm(messages, config, post_json=fake_post, log_func=None)
+
+    assert captured["payload"]["messages"] == messages
 
 def test_call_llm_with_usage_returns_content_and_usage():
     from reply_worker import LLMConfig, call_llm_with_usage
@@ -204,7 +341,13 @@ if __name__ == "__main__":
     tests = [
         test_chat_completions_url_accepts_base_variants,
         test_load_llm_config_reads_environment,
+        test_load_llm_config_reads_deepseek_options,
+        test_load_llm_config_infers_provider_from_base_url,
+        test_load_llm_config_normalizes_provider_aliases,
         test_call_llm_posts_openai_compatible_payload,
+        test_call_llm_payload_includes_deepseek_options_only_for_deepseek,
+        test_call_llm_payload_omits_deepseek_only_options_for_compatible_provider,
+        test_call_llm_accepts_structured_messages,
         test_call_llm_with_usage_returns_content_and_usage,
         test_call_llm_logs_prompt_payload_and_raw_response_without_api_key,
         test_run_once_passes_reflect_prompt_to_llm_and_on_done,

@@ -32,11 +32,11 @@ The worker logs to console and `logs/reply_worker_YYYYMMDD.log`. A failed LLM ca
 
 ## Testing Plan
 
-Use standalone `test_reply_worker.py` with injected fake HTTP transport. Cover URL normalization, environment config loading, chat completion payloads, and a single reflect cycle from `check()` to `on_done()`.
+Use standalone `tests/unit/test_reply_worker.py` with injected fake HTTP transport. Cover URL normalization, environment config loading, chat completion payloads, and a single reflect cycle from `check()` to `on_done()`.
 
 ## Implementation Plan
 
 1. Add failing tests for config, URL, LLM payload, and one-cycle reflect behavior.
 2. Implement `reply_worker.py` using `urllib.request` and dependency injection for tests.
-3. Run `uv run python test_reply_worker.py`.
+3. Run `uv run python tests/unit/test_reply_worker.py`.
 4. Update `AGENTS.md` startup instructions to use `reply_worker.py`.

@@ -1,3 +1,5 @@
+import _path  # noqa: F401
+
 from sender import find_text, strip_leading_at_mention
 
 

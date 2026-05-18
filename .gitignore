@@ -2,9 +2,14 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 logs/
 state/
 exchange/
 db_export/
+temp/
 _tmp_screenshot.png
 bot_test.log
+*.tmp

@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 DEFAULT_MEMORY_DIR = Path(__file__).parent / "state" / "chat_memory"
+DEFAULT_USER_MEMORY_FILE = Path(__file__).parent / "state" / "user_memory.json"
 
 
 def _safe_key(value: str) -> str:
@@ -30,10 +31,11 @@ def _now_iso() -> str:
 
 
 class ChatMemoryStore:
-    def __init__(self, memory_dir=DEFAULT_MEMORY_DIR, max_recent=50, summarize_fn=None):
+    def __init__(self, memory_dir=DEFAULT_MEMORY_DIR, max_recent=50, summarize_fn=None, user_memory_path=DEFAULT_USER_MEMORY_FILE):
         self.memory_dir = Path(memory_dir)
         self.max_recent = max_recent
         self.summarize_fn = summarize_fn
+        self.user_memory_path = Path(user_memory_path)
 
     def path_for(self, chat: dict) -> Path:
         return self.memory_dir / f"{memory_key(chat)}.json"
@@ -43,6 +45,7 @@ class ChatMemoryStore:
             "chat": chat.get("chat", ""),
             "is_group": bool(chat.get("is_group", False)),
             "summary": "",
+            "daily": {},
             "recent_messages": [],
             "updated_at": _now_iso(),
         }
@@ -60,6 +63,7 @@ class ChatMemoryStore:
         data.setdefault("chat", chat.get("chat", ""))
         data.setdefault("is_group", bool(chat.get("is_group", False)))
         data.setdefault("summary", "")
+        data.setdefault("daily", {})
         data.setdefault("recent_messages", [])
         data.setdefault("updated_at", _now_iso())
         return data
@@ -105,6 +109,12 @@ def _message_fingerprint(message: dict) -> str:
 def _message_time(message: dict) -> str:
     return str(message.get("timestamp") or message.get("time") or _now_iso())
 
+def _message_date(message: dict) -> str:
+    time_text = _message_time(message)
+    if len(time_text) >= 10 and re.match(r"^\d{4}-\d{2}-\d{2}", time_text):
+        return time_text[:10]
+    return datetime.now().strftime("%Y-%m-%d")
+
 def _chat_from_ref(chat_ref, messages=None, is_group=False, chat_name=None):
     if isinstance(chat_ref, dict):
         return {
@@ -137,6 +147,161 @@ def _message_to_memory_entry(message: dict) -> dict | None:
         entry["message_id"] = str(message.get("local_id"))
     return entry
 
+def _user_key(entry: dict) -> str:
+    return str(entry.get("sender_wxid") or entry.get("sender") or entry.get("role") or "unknown")
+
+def _append_daily_message(memory: dict, chat: dict, entry: dict, user_memory_path=None, max_messages_per_user=300):
+    day_key = _message_date(entry)
+    daily = memory.setdefault("daily", {})
+    day = daily.setdefault(
+        day_key,
+        {
+            "chat": chat.get("chat", memory.get("chat", "")),
+            "chat_hash": chat.get("chat_hash", ""),
+            "is_group": bool(chat.get("is_group", memory.get("is_group", False))),
+            "chat_summary": "",
+            "by_user": {},
+            "updated_at": _now_iso(),
+        },
+    )
+    day["chat"] = chat.get("chat", day.get("chat", ""))
+    day["chat_hash"] = chat.get("chat_hash", day.get("chat_hash", ""))
+    day["is_group"] = bool(chat.get("is_group", day.get("is_group", False)))
+
+    key = _user_key(entry)
+    user = day.setdefault("by_user", {}).setdefault(
+        key,
+        {
+            "name": entry.get("sender", ""),
+            "wxid": entry.get("sender_wxid", ""),
+            "message_count": 0,
+            "messages": [],
+            "summary": "",
+            "updated_at": _now_iso(),
+        },
+    )
+    if entry.get("sender"):
+        user["name"] = entry.get("sender")
+    if entry.get("sender_wxid"):
+        user["wxid"] = entry.get("sender_wxid")
+
+    daily_item = {
+        "time": entry.get("time", ""),
+        "role": entry.get("role", ""),
+        "sender": entry.get("sender", ""),
+        "content": entry.get("content", ""),
+    }
+    if entry.get("message_id"):
+        daily_item["message_id"] = entry.get("message_id")
+    fingerprint = _message_fingerprint(entry)
+    existing = {_message_fingerprint(item) for item in user.get("messages", [])}
+    if fingerprint not in existing:
+        user["messages"].append(daily_item)
+        user["message_count"] = int(user.get("message_count") or 0) + 1
+        user["messages"] = user["messages"][-max_messages_per_user:]
+    user["updated_at"] = _now_iso()
+    day["updated_at"] = _now_iso()
+    _append_global_user_daily_message(user_memory_path, chat, entry, max_messages_per_user=max_messages_per_user)
+
+def _load_json(path: Path, default: dict) -> dict:
+    if not path or not path.exists():
+        return copy.deepcopy(default)
+    try:
+        with open(path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+            return data if isinstance(data, dict) else copy.deepcopy(default)
+    except (OSError, json.JSONDecodeError):
+        return copy.deepcopy(default)
+
+def _save_json_atomic(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=2)
+    os.replace(str(tmp), str(path))
+
+def _append_global_user_daily_message(user_memory_path, chat: dict, entry: dict, max_messages_per_user=300):
+    if not user_memory_path or entry.get("role") != "user":
+        return
+    key = _user_key(entry)
+    if not key or key == "unknown":
+        return
+
+    path = Path(user_memory_path)
+    data = _load_json(path, {"updated_at": _now_iso(), "daily": {}})
+    day_key = _message_date(entry)
+    day = data.setdefault("daily", {}).setdefault(day_key, {"by_user": {}, "updated_at": _now_iso()})
+    user = day.setdefault("by_user", {}).setdefault(
+        key,
+        {
+            "name": entry.get("sender", ""),
+            "wxid": entry.get("sender_wxid", ""),
+            "chats": {},
+            "updated_at": _now_iso(),
+        },
+    )
+    if entry.get("sender"):
+        user["name"] = entry.get("sender")
+    if entry.get("sender_wxid"):
+        user["wxid"] = entry.get("sender_wxid")
+
+    chat_key = str(chat.get("chat_hash") or chat.get("chat") or "unknown")
+    chat_data = user.setdefault("chats", {}).setdefault(
+        chat_key,
+        {
+            "chat": chat.get("chat", ""),
+            "chat_hash": chat.get("chat_hash", ""),
+            "is_group": bool(chat.get("is_group", False)),
+            "message_count": 0,
+            "messages": [],
+            "summary": "",
+            "updated_at": _now_iso(),
+        },
+    )
+    chat_data["chat"] = chat.get("chat", chat_data.get("chat", ""))
+    chat_data["chat_hash"] = chat.get("chat_hash", chat_data.get("chat_hash", ""))
+    chat_data["is_group"] = bool(chat.get("is_group", chat_data.get("is_group", False)))
+
+    item = {
+        "time": entry.get("time", ""),
+        "sender": entry.get("sender", ""),
+        "content": entry.get("content", ""),
+    }
+    if entry.get("message_id"):
+        item["message_id"] = entry.get("message_id")
+    existing = {_message_fingerprint(message) for message in chat_data.get("messages", [])}
+    if _message_fingerprint(entry) not in existing:
+        chat_data["messages"].append(item)
+        chat_data["message_count"] = int(chat_data.get("message_count") or 0) + 1
+        chat_data["messages"] = chat_data["messages"][-max_messages_per_user:]
+
+    chat_data["updated_at"] = _now_iso()
+    user["updated_at"] = _now_iso()
+    day["updated_at"] = _now_iso()
+    data["updated_at"] = _now_iso()
+    _save_json_atomic(path, data)
+
+def _select_user_daily_memory(user_memory_path, chats: list[dict]) -> dict:
+    data = _load_json(Path(user_memory_path), {"daily": {}})
+    wanted = set()
+    for chat in chats:
+        for message in chat.get("messages", []) or []:
+            key = str(message.get("sender_wxid") or message.get("sender") or "").strip()
+            if key:
+                wanted.add(key)
+    if not wanted:
+        return {}
+
+    selected = {"daily": {}}
+    for day_key, day in (data.get("daily") or {}).items():
+        users = {}
+        for user_key, user in (day.get("by_user") or {}).items():
+            if user_key in wanted:
+                users[user_key] = user
+        if users:
+            selected["daily"][day_key] = {"by_user": users, "updated_at": day.get("updated_at", "")}
+    return selected
+
 def update_memory(chat_ref, messages, reply=None, is_group=False, chat_name=None, store: ChatMemoryStore | None = None):
     store = store or ChatMemoryStore()
     chat = _chat_from_ref(chat_ref, messages, is_group=is_group, chat_name=chat_name)
@@ -153,6 +318,7 @@ def update_memory(chat_ref, messages, reply=None, is_group=False, chat_name=None
             continue
         recent.append(entry)
         seen.add(fingerprint)
+        _append_daily_message(memory, chat, entry, user_memory_path=store.user_memory_path)
 
     if reply and str(reply.get("content", "")).strip():
         entry = {
@@ -164,6 +330,7 @@ def update_memory(chat_ref, messages, reply=None, is_group=False, chat_name=None
         fingerprint = _message_fingerprint(entry)
         if fingerprint not in seen:
             recent.append(entry)
+            _append_daily_message(memory, chat, entry, user_memory_path=store.user_memory_path)
 
     memory["recent_messages"] = recent
     store.save(chat, memory)
@@ -173,7 +340,6 @@ def replace_recent_memory(chat_ref, messages, is_group=False, chat_name=None, st
     store = store or ChatMemoryStore()
     chat = _chat_from_ref(chat_ref, messages, is_group=is_group, chat_name=chat_name)
     memory = store.load(chat)
-    memory["summary"] = ""
     recent = []
     seen = set()
 
@@ -186,6 +352,7 @@ def replace_recent_memory(chat_ref, messages, is_group=False, chat_name=None, st
             continue
         recent.append(entry)
         seen.add(fingerprint)
+        _append_daily_message(memory, chat, entry, user_memory_path=store.user_memory_path)
 
     memory["recent_messages"] = recent[-store.max_recent :]
     store.save(chat, memory, summarize_fn=lambda summary, overflow, chat: summary)
@@ -220,17 +387,34 @@ def summarize_memory_with_llm(existing_summary: str, messages: list[dict], chat:
     from reply_worker import call_llm_with_usage, load_llm_config
 
     chat_type = "群聊" if chat.get("is_group") else "私聊"
-    prompt = f"""请把以下微信会话历史压缩为长期记忆摘要，用中文，保留人物关系、偏好、重要事实、未解决事项和最近情绪。
-不要输出 JSON，不要编造信息，控制在 200 字以内。
+    prompt = f"""请把以下微信会话历史更新为“结构化长期记忆档案”，用中文，细节要足够可用，不要压缩成空泛短句。
+不要输出 JSON，不要编造信息。允许 800-1500 字；如果信息很多，可以更长。
+
+请使用下面的 Markdown 结构，并尽量写具体：
+
+## 长期事实
+- 只记录稳定、反复出现或对后续回复有用的信息。
+
+## 人物画像
+- 按用户分别写：谁说了什么、关注什么、偏好/雷点/表达习惯是什么。
+
+## 进行中事项
+- 记录尚未解决的问题、计划、待跟进话题。过期或一次性闲聊不要长期挂起。
+
+## 回复注意
+- 记录以后回复这个聊天框/这些用户时要注意的语气、禁忌、上下文。
+
+## 最近状态
+- 记录最近一段聊天正在发生什么，必须带具体人名和具体内容。
 
 会话: {chat.get('chat', '')} ({chat_type})
-已有摘要:
+已有长期记忆:
 {existing_summary or '无'}
 
 待压缩消息:
 {_format_messages_for_summary(messages)}
 
-更新后的长期摘要:"""
+更新后的结构化长期记忆档案:"""
     config = load_llm_config()
     result = call_llm_with_usage(prompt, config, log_func=None)
     if result.usage:
@@ -250,6 +434,10 @@ def enrich_pending_with_memory(pending: dict, store: ChatMemoryStore | None = No
     enriched = copy.deepcopy(pending)
     for chat in enriched.get("chats", []):
         chat["memory"] = store.load(chat)
+    user_daily = _select_user_daily_memory(store.user_memory_path, enriched.get("chats", []))
+    if user_daily:
+        for chat in enriched.get("chats", []):
+            chat["user_daily_memory"] = user_daily.get("daily", {})
     return enriched
 
 

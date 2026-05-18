@@ -6,6 +6,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -21,6 +22,11 @@ class LLMConfig:
     model: str
     timeout: int = 120
     temperature: float | None = None
+    provider: str = "openai_compatible"
+    max_tokens: int | None = None
+    thinking: str | None = None
+    reasoning_effort: str | None = None
+    response_format: str | None = None
 
 @dataclass(frozen=True)
 class LLMResult:
@@ -37,6 +43,21 @@ def chat_completions_url(base_url: str) -> str:
         return f"{url}/chat/completions"
     return f"{url}/v1/chat/completions"
 
+def _normalize_provider(value: str) -> str:
+    provider = str(value or "").strip().lower().replace("-", "_")
+    if provider in {"deepseek", "openai_compatible"}:
+        return provider
+    return "openai_compatible"
+
+def infer_llm_provider(base_url: str, explicit_provider: str = "") -> str:
+    if str(explicit_provider or "").strip():
+        return _normalize_provider(explicit_provider)
+    try:
+        host = urlparse(base_url).netloc.lower()
+    except Exception:
+        host = ""
+    return "deepseek" if "deepseek.com" in host else "openai_compatible"
+
 
 def load_llm_config(env=None) -> LLMConfig:
     source = os.environ if env is None else env
@@ -46,6 +67,12 @@ def load_llm_config(env=None) -> LLMConfig:
     timeout = int(source.get("LLM_TIMEOUT", "120"))
     temperature_raw = source.get("LLM_TEMPERATURE", "").strip()
     temperature = float(temperature_raw) if temperature_raw else None
+    provider = infer_llm_provider(base_url, source.get("LLM_PROVIDER", ""))
+    max_tokens_raw = source.get("LLM_MAX_TOKENS", "").strip()
+    max_tokens = int(max_tokens_raw) if max_tokens_raw else None
+    thinking = source.get("LLM_THINKING", "").strip() or None
+    reasoning_effort = source.get("LLM_REASONING_EFFORT", "").strip() or None
+    response_format = source.get("LLM_RESPONSE_FORMAT", "").strip() or None
 
     missing = [
         name
@@ -65,6 +92,11 @@ def load_llm_config(env=None) -> LLMConfig:
         model=model,
         timeout=timeout,
         temperature=temperature,
+        provider=provider,
+        max_tokens=max_tokens,
+        thinking=thinking,
+        reasoning_effort=reasoning_effort,
+        response_format=response_format,
     )
 
 
@@ -84,6 +116,16 @@ def log_line(message: str):
 def _json_pretty(data) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
 
+def _prompt_for_log(prompt_or_messages) -> str:
+    if isinstance(prompt_or_messages, list):
+        return _json_pretty(prompt_or_messages)
+    return str(prompt_or_messages)
+
+def _prompt_size(prompt_or_messages) -> int:
+    if isinstance(prompt_or_messages, list):
+        return sum(len(str(message.get("content", ""))) for message in prompt_or_messages)
+    return len(str(prompt_or_messages))
+
 
 def post_json(url, headers, payload, timeout):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -96,21 +138,45 @@ def post_json(url, headers, payload, timeout):
         raise RuntimeError(f"LLM HTTP {exc.code}: {detail}") from exc
     return json.loads(data)
 
+def _coerce_messages(prompt_or_messages) -> list[dict]:
+    if isinstance(prompt_or_messages, list):
+        return prompt_or_messages
+    return [{"role": "user", "content": str(prompt_or_messages)}]
 
-def call_llm_with_usage(prompt: str, config: LLMConfig, post_json=post_json, log_func=log_line) -> LLMResult:
+def build_chat_payload(prompt_or_messages, config: LLMConfig, log_func=None) -> dict:
     payload = {
         "model": config.model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": _coerce_messages(prompt_or_messages),
         "stream": False,
     }
     if config.temperature is not None:
         payload["temperature"] = config.temperature
+    if config.max_tokens is not None:
+        payload["max_tokens"] = config.max_tokens
+    if config.response_format:
+        payload["response_format"] = {"type": config.response_format}
+
+    if config.provider == "deepseek":
+        if config.thinking:
+            payload["thinking"] = {"type": config.thinking}
+        if config.reasoning_effort:
+            payload["reasoning_effort"] = config.reasoning_effort
+    elif log_func:
+        if config.thinking:
+            log_func(f"Ignoring DeepSeek-only option LLM_THINKING for provider={config.provider}")
+        if config.reasoning_effort:
+            log_func(f"Ignoring DeepSeek-only option LLM_REASONING_EFFORT for provider={config.provider}")
+
+    return payload
+
+def call_llm_with_usage(prompt: str, config: LLMConfig, post_json=post_json, log_func=log_line) -> LLMResult:
+    payload = build_chat_payload(prompt, config, log_func=log_func)
 
     url = chat_completions_url(config.base_url)
     if log_func:
         log_func(f"LLM request URL: {url}")
         log_func(f"LLM model: {config.model}")
-        log_func(f"LLM prompt:\n{prompt}")
+        log_func(f"LLM prompt:\n{_prompt_for_log(prompt)}")
         log_func(f"LLM request payload:\n{_json_pretty(payload)}")
 
     data = post_json(
@@ -169,7 +235,7 @@ def run_once(reflect_module, config: LLMConfig, call_llm_func=call_llm_with_usag
     if task == "/exit":
         raise SystemExit(0)
 
-    log_line(f"Reflect triggered, prompt {len(task)} chars")
+    log_line(f"Reflect triggered, prompt {_prompt_size(task)} chars")
 
     try:
         llm_result = _coerce_llm_result(call_llm_func(task, config))

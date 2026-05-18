@@ -4,7 +4,7 @@
 
 本仓库是一个 Windows 微信自动回复机器人，源码以根目录 Python 脚本为主。`bot.py` 是主轮询入口，负责读取配置、拉取消息、写入 `exchange/` 交互文件并触发发送；`reply_worker.py` 是本地反射回复进程，负责调用 LLM 并写回回复；`db.py` 负责解密后微信数据库读取；`sender.py`、`ljqCtrl.py` 负责微信窗口与点击输入自动化；`ocr_utils.py` 提供截图和 OCR；`reflect_wxchatbot_reply.py` 处理 prompt 构造与回复解析。
 
-运行期目录不要当作源码修改：`exchange/` 存放待回复和回复文件，`state/` 存放轮询状态、`chat_memory/` 会话记忆和 `token_usage.json` token 统计，`logs/` 存放日志，`db_export/` 存放导出的聊天数据库 CSV。项目文档放在 `docs/`。
+运行期目录不要当作源码修改：`exchange/` 存放待回复和回复文件，`state/` 存放轮询状态、`chat_memory/` 会话记忆、`user_memory.json` 跨会话用户每日记忆和 `token_usage.json` token 统计，`logs/` 存放日志，`db_export/` 存放导出的聊天数据库 CSV。项目文档放在 `docs/`。
 
 ## 外部依赖
 
@@ -19,12 +19,13 @@
 以下命令都必须通过 `uv` 执行。
 
 - 启动时必须打开两个独立可见控制台窗口：一个运行 `bot.py`，一个运行 `reply_worker.py`。不要把这两个长期进程静默放到后台；窗口里要直接打印日志，便于人工观察。
+- 代码改动完成后不要自动重启长期进程；先说明是否需要重启，只有维护者明确确认后再重启 `bot.py` 和 `reply_worker.py`。
 - 启动 `bot.py` 窗口时使用：`$botCmd = "& { `$Host.UI.RawUI.WindowTitle = 'wechatbot-bot'; Set-Location 'F:\dev\wechatbot'; uv run python bot.py }"; Start-Process powershell -ArgumentList @('-NoExit','-Command',$botCmd)`。
 - 启动 `reply_worker.py` 窗口时使用：`$replyCmd = "& { `$Host.UI.RawUI.WindowTitle = 'wechatbot-reply-worker'; Set-Location 'F:\dev\wechatbot'; uv run python reply_worker.py }"; Start-Process powershell -ArgumentList @('-NoExit','-Command',$replyCmd)`。
 - `uv run python sender.py`：单独调试微信发送自动化。
-- `uv run python test_ocr_dump.py`：检查截图 OCR 输出。
-- `uv run python test_sender_e2e.py`：运行真实微信端到端发送测试。
-- `uv run python test_reply_worker.py`：运行本地反射回复 worker 的单元测试。
+- `uv run python tests/manual/test_ocr_dump.py`：检查截图 OCR 输出。
+- `uv run python tests/manual/test_sender_e2e.py`：运行真实微信端到端发送测试。
+- `uv run python tests/unit/test_reply_worker.py`：运行本地反射回复 worker 的单元测试。
 - `uv add <package>`：新增依赖并生成项目元数据。
 - `uv sync`：按 `uv.lock` 同步本地环境。
 
@@ -36,7 +37,7 @@
 
 ## 会话记忆
 
-每个微信聊天框使用独立本地记忆，存放在 `state/chat_memory/`。记忆由长期 `summary` 和最近消息列表组成；`reply_worker.py` 每次调用 LLM 前会注入对应聊天的记忆，回复完成后更新该聊天的记忆文件。最近消息最多保留 50 条，超过后触发 LLM 摘要旧消息；`bot.py` 启动时必须从 DB 覆盖刷新每个会话最近 20 条聊天记录，并清空旧摘要，避免旧运行期缓存污染当前上下文。该目录可能包含私人聊天内容，必须视为敏感运行期数据。
+每个微信聊天框使用独立本地记忆，存放在 `state/chat_memory/`。记忆包含长期 `summary`、按日期/用户拆分的 `daily` 结构化记忆，以及最近消息列表；`state/user_memory.json` 额外按日期、用户、聊天框聚合跨会话发言，便于回答“某用户今天说了什么”。`reply_worker.py` 每次调用 LLM 前会注入这些记忆。最近消息最多保留 50 条，超过后触发 LLM 生成较详细的结构化长期记忆；`bot.py` 启动时从 DB 覆盖刷新每个会话最近 20 条聊天记录，但不得清空长期摘要和每日用户记忆。该目录可能包含私人聊天内容，必须视为敏感运行期数据。
 
 ## 代码风格与命名
 
@@ -44,7 +45,7 @@
 
 ## 测试规范
 
-测试目前是独立 `test_*.py` 脚本，不是完整 pytest 套件。新增测试优先命名为 `test_<feature>.py`。纯解析、数据库逻辑与真实微信自动化测试应分开；真实测试需在文件顶部说明前置条件，例如微信窗口状态、OCR 可用性和测试数据路径。
+测试目前是 `tests/` 目录下的独立 `test_*.py` 脚本，不是完整 pytest 套件。可离线测试放在 `tests/unit/`，真实微信/OCR/窗口自动化测试放在 `tests/manual/`。新增测试优先命名为 `test_<feature>.py`。真实测试需在文件顶部说明前置条件，例如微信窗口状态、OCR 可用性和测试数据路径。
 
 ## 提交与 PR 规范
 
