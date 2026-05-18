@@ -309,7 +309,13 @@ def run_once(reflect_module, config: LLMConfig, call_llm_func=call_llm_with_usag
 def run_loop(reflect_module, config: LLMConfig):
     interval = int(getattr(reflect_module, "INTERVAL", 5))
     once = bool(getattr(reflect_module, "ONCE", False))
-    log_line(f"reply_worker started model={config.model} interval={interval}s")
+    try:
+        import yaml
+        cfg = yaml.safe_load(open(PROJECT_DIR / "config.yaml", encoding="utf-8"))
+    except Exception:
+        cfg = {}
+    mode = cfg.get("reply_mode", "persona")
+    log_line(f"reply_worker started model={config.model} mode={mode} interval={interval}s")
 
     while True:
         try:

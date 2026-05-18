@@ -19,9 +19,9 @@
 以下命令都必须通过 `uv` 执行。
 
 - 启动时必须打开两个独立可见控制台窗口：一个运行 `bot.py`，一个运行 `reply_worker.py`。不要把这两个长期进程静默放到后台；窗口里要直接打印日志，便于人工观察。
-- 代码改动完成后不要自动重启长期进程；先说明是否需要重启，只有维护者明确确认后再重启 `bot.py` 和 `reply_worker.py`。
-- 启动 `bot.py` 窗口时使用：`$botCmd = "& { `$Host.UI.RawUI.WindowTitle = 'wechatbot-bot'; Set-Location 'F:\dev\wechatbot'; uv run python bot.py }"; Start-Process powershell -ArgumentList @('-NoExit','-Command',$botCmd)`。
-- 启动 `reply_worker.py` 窗口时使用：`$replyCmd = "& { `$Host.UI.RawUI.WindowTitle = 'wechatbot-reply-worker'; Set-Location 'F:\dev\wechatbot'; uv run python reply_worker.py }"; Start-Process powershell -ArgumentList @('-NoExit','-Command',$replyCmd)`。
+- 维护者叫重启时，先用 `Get-CimInstance Win32_Process` 匹配命令行中含 `wechatbot-bot` 或 `wechatbot-reply-worker` 的旧进程，全部 `Stop-Process` 后再启动新窗口。不要依赖 `MainWindowTitle`，它对 PowerShell 子进程可能为空。
+- 启动 `bot.py` 窗口时使用：`$botCmd = "& { `$Host.UI.RawUI.WindowTitle = 'wechatbot-bot'; $Host.UI.RawUI.WindowSize = New-Object Management.Automation.Host.Size(60,30); Set-Location 'F:\dev\wechatbot'; uv run python bot.py }"; Start-Process powershell -ArgumentList @('-NoExit','-Command',$botCmd)`。
+- 启动 `reply_worker.py` 窗口时使用：`$replyCmd = "& { `$Host.UI.RawUI.WindowTitle = 'wechatbot-reply-worker'; $Host.UI.RawUI.WindowSize = New-Object Management.Automation.Host.Size(60,30); Set-Location 'F:\dev\wechatbot'; uv run python reply_worker.py }"; Start-Process powershell -ArgumentList @('-NoExit','-Command',$replyCmd)`。
 - `uv run python sender.py`：单独调试微信发送自动化。
 - `uv run python tests/manual/test_ocr_dump.py`：检查截图 OCR 输出。
 - `uv run python tests/manual/test_sender_e2e.py`：运行真实微信端到端发送测试。
@@ -37,7 +37,7 @@
 
 ## 会话记忆
 
-每个微信聊天框使用独立本地记忆，存放在 `state/chat_memory/`。记忆包含长期 `summary`、按日期/用户拆分的 `daily` 结构化记忆，以及最近消息列表；`state/user_memory.json` 额外按日期、用户、聊天框聚合跨会话发言，便于回答“某用户今天说了什么”。`reply_worker.py` 每次调用 LLM 前会注入这些记忆。最近消息最多保留 50 条，超过后触发 LLM 生成较详细的结构化长期记忆；`bot.py` 启动时从 DB 覆盖刷新每个会话最近 20 条聊天记录，但不得清空长期摘要和每日用户记忆。该目录可能包含私人聊天内容，必须视为敏感运行期数据。
+每个微信聊天框使用独立本地记忆，存放在 `state/chat_memory/`。记忆包含长期 `summary`、按日期/用户拆分的 `daily` 结构化记忆，以及最近消息列表；`state/user_memory.json` 额外按日期、用户、聊天框聚合跨会话发言，便于回答“某用户今天说了什么”。`reply_worker.py` 每次调用 LLM 前会注入这些记忆。最近消息最多保留 100 条，超过后触发 LLM 生成较详细的结构化长期记忆；`bot.py` 启动时从 DB 覆盖刷新每个会话最近 20 条聊天记录，但不得清空长期摘要和每日用户记忆。该目录可能包含私人聊天内容，必须视为敏感运行期数据。
 
 ## 代码风格与命名
 
@@ -50,6 +50,15 @@
 ## 提交与 PR 规范
 
 当前 checkout 没有 Git 历史可参考。提交信息使用简短祈使句，例如 `Fix chat type detection` 或 `Add sender retry logging`。PR 需说明目的、配置变更、执行过的命令及结果；涉及 UI 自动化时附截图或关键日志，并注明是否跳过真实微信测试。
+
+## 经验教训（Agent 编辑注意事项）
+
+- **补丁回退**：`apply_patch` 在 Windows CRLF 下经常匹配失败。如果补丁不生效，改用 Python 脚本直接读/写文件：`Set-Content` 写临时 `.py` → `uv run python` 执行 → `Remove-Item` 清理。
+- **PowerShell 花括号问题**：PowerShell 会在内联 Python `-c` 脚本里把 `{data}` 解析为变量展开，导致 `ParserError`。避免用 `uv run python -c` 写含花括号的代码；用 here-string `@"..."@` 写入临时 `.py` 文件再执行。
+- **f-string 插值陷阱**：f-string 只对模板字面量做 `{{` → `{` 转义，不会对已插值的函数返回值再转义。`_output_format_block()` 如果用在 f-string 里，模板必须写单花括号 `{` `}`，不能依赖 `{{`。
+- **进程管理**：PowerShell `Get-Process` 的 `MainWindowTitle` 对子进程经常为空，杀 wechatbot 进程必须用 `Get-CimInstance Win32_Process` 匹配命令行参数（含 `wechatbot-bot` 或 `wechatbot-reply-worker`）。
+- **记忆更新时序**：bot 回复必须先发送成功再更新记忆，否则发送失败的消息也被当作已回复。实现：`on_done()` 写 `pending_meta.json`，`bot.py` 发送完成后读它调 `update_memory_after_replies`。
+- **JSON 输出模板**：`response_format=json_object` 时，模型会严格按模板格式输出。模板里的示例 JSON 必须是可直接解析的单花括号格式。
 
 ## 安全与配置
 

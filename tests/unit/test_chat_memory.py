@@ -93,7 +93,7 @@ def test_update_memory_appends_incoming_and_reply_then_trims():
 
     assert [m["content"] for m in memory["recent_messages"]] == ["第一句", "第二句", "回复"]
 
-def test_default_store_keeps_latest_50_messages():
+def test_default_store_keeps_latest_100_messages():
     from chat_memory import ChatMemoryStore
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -102,13 +102,13 @@ def test_default_store_keeps_latest_50_messages():
         memory = store.load(chat)
         memory["recent_messages"] = [
             {"role": "user", "sender": "示例用户", "content": f"消息{i}", "time": "t"}
-            for i in range(55)
+            for i in range(105)
         ]
 
         store.save(chat, memory)
         reloaded = store.load(chat)
 
-    assert len(reloaded["recent_messages"]) == 50
+    assert len(reloaded["recent_messages"]) == 100
     assert reloaded["recent_messages"][0]["content"] == "消息5"
     assert reloaded["summary"] == "summarized"
 
@@ -416,7 +416,7 @@ def test_summarizes_overflow_before_trimming():
         return "旧摘要 + 前2条"
 
     with tempfile.TemporaryDirectory() as tmp:
-        store = ChatMemoryStore(Path(tmp), max_recent=50, summarize_fn=fake_summarize)
+        store = ChatMemoryStore(Path(tmp), max_recent=100, summarize_fn=fake_summarize)
         chat = {"chat": "示例用户", "chat_hash": "abc123", "is_group": False}
         memory = store.load(chat)
         memory["summary"] = "旧摘要"
@@ -442,7 +442,7 @@ if __name__ == "__main__":
         test_store_saves_and_reloads_memory,
         test_enrich_pending_adds_memory_to_each_chat,
         test_update_memory_appends_incoming_and_reply_then_trims,
-        test_default_store_keeps_latest_50_messages,
+        test_default_store_keeps_latest_100_messages,
         test_update_memory_records_skipped_chat_messages_without_reply,
         test_update_memory_records_self_messages_as_assistant,
         test_replace_recent_memory_uses_database_snapshot_instead_of_appending,

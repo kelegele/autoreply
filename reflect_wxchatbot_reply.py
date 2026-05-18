@@ -319,7 +319,8 @@ def check():
     
     # 统计消息数
     total_msgs = sum(len(c.get('messages', [])) for c in chats)
-    _log(f"📬 检测到 {len(chats)} 个会话, {total_msgs} 条消息")
+    reply_mode = ga_data.get("reply_mode") or _load_config().get("reply_mode", "persona")
+    _log(f"📬 检测到 {len(chats)} 个会话, {total_msgs} 条消息, 模式={reply_mode}")
     
     messages = build_messages(ga_data)
     prompt_chars = sum(len(message.get("content", "")) for message in messages)

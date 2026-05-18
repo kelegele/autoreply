@@ -411,7 +411,7 @@ class WxChatBot:
         for msg in raw_msgs:
             by_chat[msg['chat_name']].append(msg)
         
-        self.logger.info("=" * 60)
+        self.logger.info("=" * 50)
         self.logger.info(f"📋 新消息：{len(by_chat)} 个会话 / {len(raw_msgs)} 条")
         
         # Bug2修复：判定已回复——只看最后一条消息是否是自己发的
@@ -441,6 +441,8 @@ class WxChatBot:
                 self.logger.debug(f"  跳过(黑名单): {chat_display}")
         
         # 更新所有会话记忆（含无需回复的消息）
+        mem_chats = 0
+        mem_msgs = 0
         try:
             from chat_memory import update_memory
             for chat_name, msgs in by_chat.items():
@@ -455,12 +457,16 @@ class WxChatBot:
                         },
                         non_self,
                     )
+                    mem_chats += 1
+                    mem_msgs += len(non_self)
+            if mem_chats:
+                self.logger.info(f"  🧠 记忆已更新: {mem_chats} 个会话 / {mem_msgs} 条消息")
         except Exception as e:
             self.logger.debug(f"  记忆更新跳过: {e}")
 
         if not filtered:
             self.logger.info("  无待回复会话")
-            self.logger.info("=" * 60)
+            self.logger.info("=" * 50)
             return
         
         self.stats["messages_found"] += len(filtered)
@@ -508,7 +514,7 @@ class WxChatBot:
             self.logger.info(f"  pending.json 已写入 {len(reply_chats)} 个会话，等待 reply_worker")
         else:
             self.logger.info("  所有会话已回复/无需回复，不写 pending")
-        self.logger.info("=" * 60)
+        self.logger.info("=" * 50)
         
         # 持久化cursor，防止重启后重复查询
         self.poll_state.save()

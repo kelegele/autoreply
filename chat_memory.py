@@ -31,7 +31,7 @@ def _now_iso() -> str:
 
 
 class ChatMemoryStore:
-    def __init__(self, memory_dir=DEFAULT_MEMORY_DIR, max_recent=50, summarize_fn=None, user_memory_path=DEFAULT_USER_MEMORY_FILE):
+    def __init__(self, memory_dir=DEFAULT_MEMORY_DIR, max_recent=100, summarize_fn=None, user_memory_path=DEFAULT_USER_MEMORY_FILE):
         self.memory_dir = Path(memory_dir)
         self.max_recent = max_recent
         self.summarize_fn = summarize_fn
