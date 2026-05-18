@@ -32,6 +32,8 @@
 
 `reply_worker.py` 使用 OpenAI-compatible `/chat/completions` HTTP API。通过 `.env` 或系统环境变量配置 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`，可选配置 `LLM_TIMEOUT` 和 `LLM_TEMPERATURE`。DeepSeek 示例：`LLM_BASE_URL=https://api.deepseek.com`，`LLM_MODEL=deepseek-v4-flash`。不要提交真实 `LLM_API_KEY`。
 
+回复模式由 `reply_mode` 控制：`persona` 使用 Flerken 人设；`llm_chat` 尽量像浏览器里的大模型聊天页直接回复，不套人设。可用环境变量 `WX_REPLY_MODE=llm_chat` 临时覆盖。
+
 ## 会话记忆
 
 每个微信聊天框使用独立本地记忆，存放在 `state/chat_memory/`。记忆由长期 `summary` 和最近消息列表组成；`reply_worker.py` 每次调用 LLM 前会注入对应聊天的记忆，回复完成后更新该聊天的记忆文件。最近消息最多保留 50 条，超过后触发 LLM 摘要旧消息；`bot.py` 启动时必须从 DB 覆盖刷新每个会话最近 20 条聊天记录，并清空旧摘要，避免旧运行期缓存污染当前上下文。该目录可能包含私人聊天内容，必须视为敏感运行期数据。

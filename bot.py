@@ -38,6 +38,7 @@ _ENV_DB_MAP = {
 }
 _ENV_BOT_MAP = {
     'WX_PERSONA':    'persona',
+    'WX_REPLY_MODE': 'reply_mode',
     'WX_MODE':       'mode',          # blacklist / whitelist
     'WX_BLACKLIST':  'blacklist',     # 逗号分隔
     'WX_WHITELIST':  'whitelist',     # 逗号分隔
@@ -230,6 +231,7 @@ def should_reply(chat_display, config, my_wxid=None):
 def format_messages_for_ga(raw_messages, config):
     """将原始消息格式化为 reply_worker 可理解的结构"""
     persona = config.get('persona', '你是一个友好的聊天助手')
+    reply_mode = config.get('reply_mode', 'persona')
     results = []
     
     # 按会话分组（chat_name作为key，区分私聊和群聊）
@@ -281,6 +283,7 @@ def format_messages_for_ga(raw_messages, config):
     
     return {
         "persona": persona,
+        "reply_mode": reply_mode,
         "chats": results
     }
 

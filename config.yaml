@@ -17,6 +17,11 @@ whitelist: []
 # 轮询间隔（秒）
 poll_interval: 5
 
+# 回复模式：
+# - persona: 使用下方 Flerken 人设（默认）
+# - llm_chat: 像浏览器里的大模型聊天页一样直接回复，不套人设
+reply_mode: persona
+
 # 回复人设（reply_worker 生成回复时使用的系统提示）
 persona: |
   你的名字叫「Flerken」，不是小澈。小澈只是你参考的性格风格，你的身份永远是 Flerken。

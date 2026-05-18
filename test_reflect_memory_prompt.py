@@ -108,6 +108,48 @@ def test_build_prompt_tells_group_reply_not_to_prefix_at_name():
 
     assert "群聊回复正文不要以 @昵称 开头" in prompt
 
+def test_build_prompt_persona_mode_includes_persona():
+    import reflect_wxchatbot_reply as reflect
+
+    prompt = reflect.build_prompt(
+        {
+            "reply_mode": "persona",
+            "persona": "你是Flerken测试人格",
+            "chats": [
+                {
+                    "chat": "示例用户",
+                    "is_group": False,
+                    "messages": [{"sender": "示例用户", "content": "你好"}],
+                }
+            ],
+        }
+    )
+
+    assert "## persona" in prompt
+    assert "你是Flerken测试人格" in prompt
+
+def test_build_prompt_llm_chat_mode_omits_persona_and_uses_direct_chat_rules():
+    import reflect_wxchatbot_reply as reflect
+
+    prompt = reflect.build_prompt(
+        {
+            "reply_mode": "llm_chat",
+            "persona": "你是Flerken测试人格",
+            "chats": [
+                {
+                    "chat": "示例用户",
+                    "is_group": False,
+                    "messages": [{"sender": "示例用户", "content": "帮我解释一下uv"}],
+                }
+            ],
+        }
+    )
+
+    assert "## persona" not in prompt
+    assert "你是Flerken测试人格" not in prompt
+    assert "LLM-chat 模式" in prompt
+    assert "像普通大模型聊天页一样" in prompt
+
 
 if __name__ == "__main__":
     tests = [
@@ -115,6 +157,8 @@ if __name__ == "__main__":
         test_build_prompt_includes_memory_message_times,
         test_build_prompt_shows_timestamps_and_gap,
         test_build_prompt_tells_group_reply_not_to_prefix_at_name,
+        test_build_prompt_persona_mode_includes_persona,
+        test_build_prompt_llm_chat_mode_omits_persona_and_uses_direct_chat_rules,
     ]
     for test in tests:
         test()
