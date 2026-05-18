@@ -288,19 +288,6 @@ def run_once(reflect_module, config: LLMConfig, call_llm_func=call_llm_with_usag
                 return True
         raise
 
-    # Check if LLM result looks like a content policy refusal
-    refusal_markers = ["i cannot", "i can't", "作为ai", "as an ai", "i'm unable", "抱歉", "无法", "不当", "inappropriate"]
-    result_lower = result.lower()
-    if any(marker in result_lower for marker in refusal_markers):
-        phrases = _load_fallback_phrases("fallback_sensitive")
-        if phrases and hasattr(reflect_module, "_pending_chats"):
-            replies = [_pick_fallback(c["chat"], c.get("is_group", False), c.get("sender", ""), phrases) for c in reflect_module._pending_chats]
-            log_line(f"LLM refused content, using fallback_sensitive for {len(replies)} chats")
-            # Write fallback replies directly
-            if hasattr(reflect_module, "on_done"):
-                reflect_module.on_done(json.dumps(replies, ensure_ascii=False))
-            return True
-
     if hasattr(reflect_module, "on_done"):
         reflect_module.on_done(result)
     return True

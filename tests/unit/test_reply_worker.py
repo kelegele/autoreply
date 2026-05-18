@@ -351,6 +351,46 @@ def test_run_once_records_token_usage_for_pending_chats():
     assert data["by_chat"]["abc123"]["total_tokens"] == 12
 
 
+def test_run_once_does_not_replace_capability_limit_with_sensitive_fallback():
+    from reply_worker import LLMConfig, run_once
+
+    calls = []
+    llm_content = json.dumps(
+        {
+            "replies": [
+                {
+                    "chat": "示例群聊",
+                    "content": "抱歉，我无法实时查询天气，请使用天气预报应用查看准确信息。",
+                    "is_group": True,
+                    "sender": "示例用户",
+                    "skip": False,
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    class FakeReflect:
+        _pending_chats = [{"chat": "示例群聊", "is_group": True, "sender": "示例用户"}]
+
+        def check(self):
+            return "reply to this"
+
+        def on_done(self, result):
+            calls.append(result)
+
+    def fake_call_llm(prompt, config, user_id=None):
+        return llm_content
+
+    config = LLMConfig(
+        base_url="https://api.deepseek.com/v1",
+        api_key="test-key",
+        model="deepseek-v4-flash",
+    )
+
+    assert run_once(FakeReflect(), config, call_llm_func=fake_call_llm) is True
+    assert calls == [llm_content]
+
 def test_run_once_does_nothing_when_no_task():
     from reply_worker import LLMConfig, run_once
 
@@ -493,6 +533,7 @@ if __name__ == "__main__":
         test_call_llm_logs_prompt_payload_and_raw_response_without_api_key,
         test_run_once_passes_reflect_prompt_to_llm_and_on_done,
         test_run_once_records_token_usage_for_pending_chats,
+        test_run_once_does_not_replace_capability_limit_with_sensitive_fallback,
         test_run_once_does_nothing_when_no_task,
         test_call_llm_raises_on_content_filter_finish,
         test_call_llm_raises_on_insufficient_system_resource,

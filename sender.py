@@ -161,6 +161,33 @@ def _is_green_selected(img, cx, cy):
     except Exception:
         return False
 
+def is_chat_row_selected(img, match, list_width=None):
+    """Detect selected WeChat chat row by sampling row background, not OCR text pixels."""
+    try:
+        bbox = match.get("bbox") or []
+        cy = int(match.get("cy", 0))
+        if bbox:
+            y_values = [point[1] for point in bbox]
+            row_top = max(0, int(min(y_values)) - 18)
+            row_bottom = min(img.size[1] - 1, int(max(y_values)) + 18)
+        else:
+            row_top = max(0, cy - 28)
+            row_bottom = min(img.size[1] - 1, cy + 28)
+
+        width = int(list_width or img.size[0] * 0.3)
+        width = max(1, min(width, img.size[0] - 1))
+        sample_xs = [int(width * ratio) for ratio in (0.12, 0.20, 0.32, 0.46, 0.62, 0.78, 0.92)]
+        sample_ys = [row_top + int((row_bottom - row_top) * ratio) for ratio in (0.25, 0.5, 0.75)]
+
+        green_hits = 0
+        for x in sample_xs:
+            for y in sample_ys:
+                if _is_green_selected(img, x, y):
+                    green_hits += 1
+        return green_hits >= 3
+    except Exception:
+        return False
+
 def find_text(details, target, exact=True, x_min=None, x_max=None, y_min=None, y_max=None):
     """在OCR结果中查找文本，返回 [{'text','cx','cy'}, ...]"""
     matches = []
@@ -186,7 +213,7 @@ def find_text(details, target, exact=True, x_min=None, x_max=None, y_min=None, y
             continue
         if y_max is not None and cy > y_max:
             continue
-        matches.append({'text': t, 'cx': cx, 'cy': cy, 'score': score})
+        matches.append({'text': t, 'cx': cx, 'cy': cy, 'score': score, 'bbox': bbox})
     return matches
 
 def strip_leading_at_mention(msg, at_name):
@@ -256,7 +283,7 @@ def send_to(target_name, msg, max_retries=5, at_name=None):
             log_line(f'  📋 列表找到: "{target["text"]}" at ({target["cx"]:.0f},{target["cy"]:.0f})')
 
             # ── 绿色检测：列表项背景偏绿=已选中=已在目标聊天 ──
-            if _is_green_selected(img, target['cx'], target['cy']):
+            if is_chat_row_selected(img, target, list_width=w * 0.3):
                 log_line(f'  🟩 列表项已选中（绿色），直接发送')
                 _do_send(hwnd, msg, at_name=at_name)
                 return True
@@ -340,7 +367,7 @@ def _do_send(hwnd, msg, at_name=None):
         force_foreground(hwnd)
         ljqCtrl.Press('ctrl+v', staytime=0)
         time.sleep(0.5)
-        log_line(f'  ✅ 已发送(@{at_name}): {msg[:50]}')
+        log_line(f'  ✅ 已执行发送动作(@{at_name}): {msg[:50]}')
     else:
         # ── 私聊模式：直接粘贴 ──
         clip = _get_clipboard()
@@ -349,7 +376,7 @@ def _do_send(hwnd, msg, at_name=None):
         force_foreground(hwnd)
         ljqCtrl.Press('ctrl+v', staytime=0)
         time.sleep(0.5)
-        log_line(f'  ✅ 已发送: {msg[:50]}')
+        log_line(f'  ✅ 已执行发送动作: {msg[:50]}')
 
     # Enter发送
     force_foreground(hwnd)

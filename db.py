@@ -5,9 +5,10 @@ wxchatbot DB模块 - 微信数据库解密+消息查询
 """
 import os, sys, sqlite3, json, re, threading, traceback, time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from decrypt import decrypt_db_to_sqlite
+from text_sanitize import sanitize_message_content
 
 
 # ============ 配置 ============
@@ -351,6 +352,65 @@ def query_recent_messages(
 
     return []
 
+def sent_message_exists(
+    db_path: str,
+    key: bytes,
+    my_wxid: str,
+    uname2display: dict,
+    chat_hash: str,
+    chat_name: str,
+    content: str,
+    since_time=None,
+    my_display_name: str = '',
+    limit_per_chat: int = 80,
+) -> bool:
+    """Return True only when the sent self message is visible in WeChat DB."""
+    target_content = sanitize_message_content(content)
+    if not target_content:
+        return False
+
+    since_dt = None
+    if since_time:
+        if isinstance(since_time, datetime):
+            since_dt = since_time
+        else:
+            try:
+                since_dt = datetime.fromtimestamp(float(since_time))
+            except Exception:
+                since_dt = None
+        if since_dt:
+            since_dt = since_dt.replace(microsecond=0) - timedelta(seconds=2)
+
+    messages = query_recent_messages(
+        db_path,
+        key,
+        my_wxid,
+        uname2display,
+        limit_per_chat=limit_per_chat,
+        my_display_name=my_display_name,
+    )
+
+    normalized_hash = str(chat_hash or "").lower()
+    for item in messages:
+        if not item.get("is_self"):
+            continue
+        if normalized_hash and str(item.get("chat_hash", "")).lower() != normalized_hash:
+            continue
+        if not normalized_hash and chat_name and item.get("chat_name") != chat_name:
+            continue
+        if sanitize_message_content(item.get("content", "")) != target_content:
+            continue
+        if since_dt:
+            try:
+                item_dt = datetime.strptime(str(item.get("timestamp", ""))[:19], "%Y-%m-%d %H:%M:%S")
+                if item_dt < since_dt:
+                    continue
+            except Exception:
+                pass
+        return True
+
+    return False
+
 def _do_query_recent(db_path, key, my_wxid, uname2display, limit_per_chat, my_display_name='') -> list:
     conn = tmp = None
     result = []
@@ -427,6 +487,9 @@ def _do_query_recent(db_path, key, my_wxid, uname2display, limit_per_chat, my_di
                             if body.startswith(pfx):
                                 body = body[len(pfx):].strip()
                                 break
+                body = sanitize_message_content(body)
+                if not body:
+                    continue
 
                 at_me = f'@{my_wxid}' in content or f'@{my_wxid}' in body
                 if not at_me and my_display_name:
@@ -609,6 +672,9 @@ def _do_query(
                             if body.startswith(pfx):
                                 body = body[len(pfx):].strip()
                                 break
+                body = sanitize_message_content(body)
+                if not body:
+                    continue
                 
                 # 检测@我 — 同时检查wxid和配置的显示名
                 at_me = f'@{my_wxid}' in content or f'@{my_wxid}' in body

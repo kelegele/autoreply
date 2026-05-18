@@ -6,6 +6,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from text_sanitize import NON_TEXT_PLACEHOLDER, sanitize_message_content
+
 
 DEFAULT_MEMORY_DIR = Path(__file__).parent / "state" / "chat_memory"
 DEFAULT_USER_MEMORY_FILE = Path(__file__).parent / "state" / "user_memory.json"
@@ -66,6 +68,8 @@ class ChatMemoryStore:
         data.setdefault("daily", {})
         data.setdefault("recent_messages", [])
         data.setdefault("updated_at", _now_iso())
+        data["recent_messages"] = _sanitize_memory_entries(data.get("recent_messages", []))
+        data["daily"] = _sanitize_daily_memory(data.get("daily", {}))
         return data
 
     def save(self, chat: dict, memory: dict, summarize_fn=None):
@@ -73,7 +77,7 @@ class ChatMemoryStore:
         data = copy.deepcopy(memory)
         data["chat"] = chat.get("chat", data.get("chat", ""))
         data["is_group"] = bool(chat.get("is_group", data.get("is_group", False)))
-        recent = list(data.get("recent_messages", []))
+        recent = _sanitize_memory_entries(data.get("recent_messages", []))
         if len(recent) > self.max_recent:
             overflow = recent[: -self.max_recent]
             recent = recent[-self.max_recent :]
@@ -131,7 +135,7 @@ def _chat_from_ref(chat_ref, messages=None, is_group=False, chat_name=None):
     }
 
 def _message_to_memory_entry(message: dict) -> dict | None:
-    content = str(message.get("content", "")).strip()
+    content = sanitize_message_content(message.get("content", ""))
     if not content:
         return None
     is_self = bool(message.get("is_self", False))
@@ -151,6 +155,10 @@ def _user_key(entry: dict) -> str:
     return str(entry.get("sender_wxid") or entry.get("sender") or entry.get("role") or "unknown")
 
 def _append_daily_message(memory: dict, chat: dict, entry: dict, user_memory_path=None, max_messages_per_user=300):
+    entry = copy.deepcopy(entry)
+    entry["content"] = sanitize_message_content(entry.get("content", ""))
+    if not entry["content"]:
+        return
     day_key = _message_date(entry)
     daily = memory.setdefault("daily", {})
     day = daily.setdefault(
@@ -203,6 +211,30 @@ def _append_daily_message(memory: dict, chat: dict, entry: dict, user_memory_pat
     day["updated_at"] = _now_iso()
     _append_global_user_daily_message(user_memory_path, chat, entry, max_messages_per_user=max_messages_per_user)
 
+def _sanitize_memory_entries(entries):
+    cleaned = []
+    for item in entries or []:
+        if not isinstance(item, dict):
+            continue
+        entry = copy.deepcopy(item)
+        entry["content"] = sanitize_message_content(entry.get("content", ""))
+        if entry["content"]:
+            cleaned.append(entry)
+    return cleaned
+
+def _sanitize_daily_memory(daily):
+    if not isinstance(daily, dict):
+        return {}
+    cleaned_daily = copy.deepcopy(daily)
+    for day in (cleaned_daily or {}).values():
+        if not isinstance(day, dict):
+            continue
+        for user in (day.get("by_user") or {}).values():
+            if isinstance(user, dict):
+                user["messages"] = _sanitize_memory_entries(user.get("messages", []))
+                user["message_count"] = len(user["messages"])
+    return cleaned_daily
+
 def _load_json(path: Path, default: dict) -> dict:
     if not path or not path.exists():
         return copy.deepcopy(default)
@@ -222,6 +254,10 @@ def _save_json_atomic(path: Path, data: dict):
 
 def _append_global_user_daily_message(user_memory_path, chat: dict, entry: dict, max_messages_per_user=300):
     if not user_memory_path or entry.get("role") != "user":
+        return
+    entry = copy.deepcopy(entry)
+    entry["content"] = sanitize_message_content(entry.get("content", ""))
+    if not entry["content"]:
         return
     key = _user_key(entry)
     if not key or key == "unknown":
@@ -448,21 +484,27 @@ def enrich_pending_with_memory(pending: dict, store: ChatMemoryStore | None = No
 
 def update_memory_after_replies(pending: dict, replies: list[dict], store: ChatMemoryStore | None = None):
     store = store or ChatMemoryStore()
-    replies_by_key = {memory_key(reply): reply for reply in replies if not reply.get("skip", False)}
+    replies_by_key = {}
+    for reply in replies:
+        if reply.get("skip", False):
+            continue
+        if reply.get("_send_success") is False:
+            continue
+        replies_by_key.setdefault(memory_key(reply), []).append(reply)
 
     for chat in pending.get("chats", []):
         key = memory_key(chat)
-        reply = replies_by_key.get(key)
-        if reply is None:
-            reply = next(
-                (
-                    item
-                    for item in replies
-                    if not item.get("skip", False)
-                    and item.get("chat") == chat.get("chat")
-                    and bool(item.get("is_group", chat.get("is_group", False))) == bool(chat.get("is_group", False))
-                ),
-                None,
-            )
+        chat_replies = list(replies_by_key.get(key, []))
+        if not chat_replies:
+            chat_replies = [
+                item
+                for item in replies
+                if not item.get("skip", False)
+                and item.get("_send_success") is not False
+                and item.get("chat") == chat.get("chat")
+                and bool(item.get("is_group", chat.get("is_group", False))) == bool(chat.get("is_group", False))
+            ]
 
-        update_memory(chat, chat.get("messages", []), reply=reply, store=store)
+        update_memory(chat, chat.get("messages", []), store=store)
+        for reply in chat_replies:
+            update_memory(chat, [], reply=reply, store=store)

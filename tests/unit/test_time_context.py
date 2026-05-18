@@ -29,6 +29,7 @@ def test_prompt_includes_time_context_and_forbids_time_prefixes():
 
     data = {
         "persona": "p",
+        "reply_mode": "persona",
         "chats": [
             {
                 "chat": "示例用户",

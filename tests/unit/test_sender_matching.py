@@ -1,6 +1,8 @@
 import _path  # noqa: F401
 
-from sender import find_text, strip_leading_at_mention
+from PIL import Image
+
+from sender import find_text, is_chat_row_selected, strip_leading_at_mention
 
 
 def _detail(text, x1=100, y1=100, x2=200, y2=130):
@@ -34,11 +36,28 @@ def test_strip_leading_at_mention_keeps_non_matching_content():
     assert strip_leading_at_mention(msg, "示例用户") == msg
 
 
+def test_selected_chat_detection_samples_row_background_not_text_center():
+    img = Image.new("RGB", (500, 260), (245, 245, 245))
+    for x in range(20, 220):
+        for y in range(130, 190):
+            img.putpixel((x, y), (40, 200, 80))
+
+    match = _detail("广州一齐局", x1=100, y1=145, x2=180, y2=170)
+    match["cx"] = 140
+    match["cy"] = 157
+    for x in range(100, 181):
+        for y in range(145, 171):
+            img.putpixel((x, y), (20, 20, 20))
+
+    assert is_chat_row_selected(img, match, list_width=220)
+
+
 if __name__ == "__main__":
     tests = [
         test_find_text_fuzzy_matches_ocr_damaged_chinese_chat_name,
         test_strip_leading_at_mention_removes_group_at_prefix,
         test_strip_leading_at_mention_keeps_non_matching_content,
+        test_selected_chat_detection_samples_row_background_not_text_center,
     ]
     for test in tests:
         test()

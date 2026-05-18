@@ -5,6 +5,7 @@ def test_build_prompt_includes_chat_memory():
 
     ga_data = {
         "persona": "你是测试人格",
+        "reply_mode": "persona",
         "chats": [
             {
                 "chat": "示例用户",
@@ -34,6 +35,7 @@ def test_build_prompt_includes_structured_daily_user_memory():
 
     ga_data = {
         "persona": "你是测试人格",
+        "reply_mode": "persona",
         "chats": [
             {
                 "chat": "测试群",
@@ -148,6 +150,7 @@ def test_build_prompt_shows_timestamps_and_gap():
 
     ga_data = {
         "persona": "你是测试人格",
+        "reply_mode": "persona",
         "chats": [
             {
                 "chat": "测试群",
@@ -191,6 +194,116 @@ def test_build_prompt_tells_group_reply_not_to_prefix_at_name():
     )
 
     assert "群聊回复正文不要以 @昵称 开头" in prompt
+
+def test_build_prompt_tells_persona_mode_to_reply_per_mention():
+    import reflect_wxchatbot_reply as reflect
+
+    prompt = reflect.build_prompt(
+        {
+            "reply_mode": "persona",
+            "persona": "你是测试人格",
+            "chats": [
+                {
+                    "chat": "测试群",
+                    "is_group": True,
+                    "messages": [
+                        {"sender": "示例用户", "content": "@Flerken 广州天气", "is_at": True},
+                        {"sender": "蕉太", "content": "@Flerken 泉州天气", "is_at": True},
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert "逐条输出 reply" in prompt
+    assert "chat 可以相同" in prompt
+    assert "sender 必须分别对应原提问者" in prompt
+
+def test_build_prompt_tells_llm_chat_mode_to_reply_per_mention():
+    import reflect_wxchatbot_reply as reflect
+
+    prompt = reflect.build_prompt(
+        {
+            "reply_mode": "llm_chat",
+            "chats": [
+                {
+                    "chat": "测试群",
+                    "is_group": True,
+                    "messages": [
+                        {"sender": "示例用户", "content": "@Flerken 广州天气", "is_at": True},
+                        {"sender": "蕉太", "content": "@Flerken 泉州天气", "is_at": True},
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert "逐条输出 reply" in prompt
+    assert "chat 可以相同" in prompt
+    assert "sender 必须分别对应原提问者" in prompt
+
+def test_build_prompt_marks_random_interjection_as_proactive_task():
+    import reflect_wxchatbot_reply as reflect
+
+    prompt = reflect.build_prompt(
+        {
+            "reply_mode": "llm_chat",
+            "chats": [
+                {
+                    "chat": "测试群",
+                    "is_group": True,
+                    "reply_reason": "随机插话",
+                    "messages": [{"sender": "霜序廿七", "content": "@Kat", "is_at": False}],
+                }
+            ],
+        }
+    )
+
+    assert "主动随机插话任务" in prompt
+    assert "当前消息没有 @你 或 @了别人，也必须完成这次插话" in prompt
+    assert "sender 设为空字符串" in prompt
+
+def test_build_prompt_does_not_expose_skip_decision_to_model():
+    import reflect_wxchatbot_reply as reflect
+
+    prompt = reflect.build_prompt(
+        {
+            "reply_mode": "llm_chat",
+            "chats": [
+                {
+                    "chat": "测试群",
+                    "is_group": True,
+                    "reply_reason": "随机插话",
+                    "messages": [{"sender": "霜序廿七", "content": "@Kat", "is_at": False}],
+                }
+            ],
+        }
+    )
+
+    assert "skip" not in prompt.lower()
+    assert "不回复" not in prompt
+
+def test_build_prompt_sanitizes_garbled_current_message_for_model():
+    import reflect_wxchatbot_reply as reflect
+
+    garbled = "(�/�`7\u0000=\t\u0000D\u0011wxid_demo1:\n@Flerken 写一个 Python 函数\u0005\u0000m\u0004�\u001d�b�N"
+
+    prompt = reflect.build_prompt(
+        {
+            "reply_mode": "llm_chat",
+            "chats": [
+                {
+                    "chat": "测试群",
+                    "is_group": True,
+                    "messages": [{"sender": "示例用户", "content": garbled, "is_at": True}],
+                }
+            ],
+        }
+    )
+
+    assert "@Flerken 写一个 Python 函数" in prompt
+    assert "\x00" not in prompt
+    assert "�" not in prompt
 
 def test_output_format_requests_json_object_replies():
     import reflect_wxchatbot_reply as reflect
@@ -301,6 +414,48 @@ def test_build_prompt_llm_chat_mode_omits_persona_and_uses_direct_chat_rules():
     assert "LLM-chat 模式" in prompt
     assert "像普通大模型聊天页一样" in prompt
 
+def test_build_prompt_llm_chat_mode_preserves_model_capability():
+    import reflect_wxchatbot_reply as reflect
+
+    prompt = reflect.build_prompt(
+        {
+            "reply_mode": "llm_chat",
+            "persona": "不应该出现",
+            "chats": [
+                {
+                    "chat": "示例用户",
+                    "is_group": False,
+                    "messages": [{"sender": "示例用户", "content": "写一个 Python 函数并解释思路"}],
+                }
+            ],
+        }
+    )
+
+    assert "不要为了像微信短回复而牺牲正确性和完整性" in prompt
+    assert "可以使用分步骤、代码块、列表" in prompt
+    assert "content 字段里放最终要发出的完整回答" in prompt
+
+def test_build_prompt_llm_chat_mode_uses_general_honesty_boundary():
+    import reflect_wxchatbot_reply as reflect
+
+    prompt = reflect.build_prompt(
+        {
+            "reply_mode": "llm_chat",
+            "chats": [
+                {
+                    "chat": "示例用户",
+                    "is_group": False,
+                    "messages": [{"sender": "示例用户", "content": "回答一个需要核实的问题"}],
+                }
+            ],
+        }
+    )
+
+    assert "对缺少上下文、无法验证或需要外部实时信息的问题" in prompt
+    assert "明确说明不确定性" in prompt
+    assert "不要假装已经查询或确认" in prompt
+    assert "天气" not in prompt
+
 def test_build_messages_llm_chat_mode_omits_persona_but_keeps_memory():
     import reflect_wxchatbot_reply as reflect
 
@@ -397,6 +552,11 @@ if __name__ == "__main__":
         test_build_prompt_includes_memory_message_times,
         test_build_prompt_shows_timestamps_and_gap,
         test_build_prompt_tells_group_reply_not_to_prefix_at_name,
+        test_build_prompt_tells_persona_mode_to_reply_per_mention,
+        test_build_prompt_tells_llm_chat_mode_to_reply_per_mention,
+        test_build_prompt_marks_random_interjection_as_proactive_task,
+        test_build_prompt_does_not_expose_skip_decision_to_model,
+        test_build_prompt_sanitizes_garbled_current_message_for_model,
         test_output_format_requests_json_object_replies,
         test_extract_replies_accepts_json_object_replies,
         test_extract_replies_accepts_fenced_json_object_replies,
@@ -404,6 +564,8 @@ if __name__ == "__main__":
         test_build_prompt_persona_mode_includes_persona,
         test_build_messages_persona_mode_splits_system_and_user,
         test_build_prompt_llm_chat_mode_omits_persona_and_uses_direct_chat_rules,
+        test_build_prompt_llm_chat_mode_preserves_model_capability,
+        test_build_prompt_llm_chat_mode_uses_general_honesty_boundary,
         test_build_messages_llm_chat_mode_omits_persona_but_keeps_memory,
         test_build_prompt_llm_chat_mode_still_includes_memory,
     ]

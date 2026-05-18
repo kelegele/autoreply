@@ -93,6 +93,69 @@ def test_update_memory_appends_incoming_and_reply_then_trims():
 
     assert [m["content"] for m in memory["recent_messages"]] == ["第一句", "第二句", "回复"]
 
+def test_update_memory_after_replies_records_multiple_replies_for_same_chat():
+    from chat_memory import ChatMemoryStore, update_memory_after_replies
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChatMemoryStore(Path(tmp), user_memory_path=Path(tmp) / "user_memory.json")
+        pending = {
+            "chats": [
+                {
+                    "chat": "测试群",
+                    "chat_hash": "group123",
+                    "is_group": True,
+                    "messages": [
+                        {"sender": "示例用户", "content": "@Flerken 广州天气", "is_at": True},
+                        {"sender": "蕉太", "content": "@Flerken 泉州天气", "is_at": True},
+                    ],
+                }
+            ]
+        }
+        replies = [
+            {"chat": "测试群", "chat_hash": "group123", "content": "广州看天气应用更准", "sender": "示例用户", "skip": False},
+            {"chat": "测试群", "chat_hash": "group123", "content": "泉州也建议看实时预报", "sender": "蕉太", "skip": False},
+        ]
+
+        update_memory_after_replies(pending, replies, store)
+        memory = store.load({"chat": "测试群", "chat_hash": "group123", "is_group": True})
+
+    assert [m["content"] for m in memory["recent_messages"]] == [
+        "@Flerken 广州天气",
+        "@Flerken 泉州天气",
+        "广州看天气应用更准",
+        "泉州也建议看实时预报",
+    ]
+
+def test_update_memory_after_replies_does_not_record_failed_send_as_bot_reply():
+    from chat_memory import ChatMemoryStore, update_memory_after_replies
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChatMemoryStore(Path(tmp), user_memory_path=Path(tmp) / "user_memory.json")
+        pending = {
+            "chats": [
+                {
+                    "chat": "测试群",
+                    "chat_hash": "group123",
+                    "is_group": True,
+                    "messages": [{"sender": "示例用户", "content": "@Flerken 在吗", "is_at": True}],
+                }
+            ]
+        }
+        replies = [
+            {
+                "chat": "测试群",
+                "chat_hash": "group123",
+                "content": "在",
+                "sender": "示例用户",
+                "_send_success": False,
+            }
+        ]
+
+        update_memory_after_replies(pending, replies, store)
+        memory = store.load({"chat": "测试群", "chat_hash": "group123", "is_group": True})
+
+    assert [m["content"] for m in memory["recent_messages"]] == ["@Flerken 在吗"]
+
 def test_default_store_keeps_latest_100_messages():
     from chat_memory import ChatMemoryStore
 
@@ -167,6 +230,73 @@ def test_update_memory_records_self_messages_as_assistant():
 
     assert memory["recent_messages"][0]["role"] == "assistant"
     assert memory["recent_messages"][0]["sender"] == "bot"
+
+def test_update_memory_sanitizes_garbled_binary_like_text():
+    from chat_memory import ChatMemoryStore, update_memory
+
+    garbled = "(�/�`7\u0000=\t\u0000D\u0011wxid_demo1:\n@Flerken 写一个 Python 函数\u0005\u0000m\u0004�\u001d�b�N"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChatMemoryStore(Path(tmp), user_memory_path=Path(tmp) / "user_memory.json")
+        chat = {"chat": "测试群", "chat_hash": "group123", "is_group": True}
+
+        update_memory(
+            chat,
+            [
+                {
+                    "local_id": 1,
+                    "sender": "示例用户",
+                    "sender_wxid": "wxid_f",
+                    "content": garbled,
+                    "timestamp": "2026-05-18 10:00:00",
+                },
+                {
+                    "local_id": 2,
+                    "sender": "示例用户",
+                    "sender_wxid": "wxid_f",
+                    "content": "正常文本",
+                    "timestamp": "2026-05-18 10:01:00",
+                },
+            ],
+            store=store,
+        )
+        memory = store.load(chat)
+
+    contents = [item["content"] for item in memory["recent_messages"]]
+    assert contents[0] == "@Flerken 写一个 Python 函数"
+    assert contents[1] == "正常文本"
+    assert memory["daily"]["2026-05-18"]["by_user"]["wxid_f"]["message_count"] == 2
+
+def test_store_load_sanitizes_existing_garbled_memory_entries():
+    import json
+    from chat_memory import ChatMemoryStore
+
+    garbled = "(�/�`7\u0000=\t\u0000D\u0011wxid_demo1:\n乱码\u0005\u0000m\u0004�\u001d�b�N"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        memory_dir = Path(tmp)
+        path = memory_dir / "group123.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "chat": "测试群",
+                    "is_group": True,
+                    "summary": "",
+                    "daily": {},
+                    "recent_messages": [
+                        {"role": "user", "sender": "示例用户", "content": garbled, "time": "t"},
+                        {"role": "user", "sender": "示例用户", "content": "正常文本", "time": "t"},
+                    ],
+                    "updated_at": "2026-05-18T10:00:00",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        store = ChatMemoryStore(memory_dir)
+        memory = store.load({"chat": "测试群", "chat_hash": "group123", "is_group": True})
+
+    assert [item["content"] for item in memory["recent_messages"]] == ["乱码", "正常文本"]
 
 def test_replace_recent_memory_uses_database_snapshot_instead_of_appending():
     from chat_memory import ChatMemoryStore, replace_recent_memory
@@ -442,9 +572,13 @@ if __name__ == "__main__":
         test_store_saves_and_reloads_memory,
         test_enrich_pending_adds_memory_to_each_chat,
         test_update_memory_appends_incoming_and_reply_then_trims,
+        test_update_memory_after_replies_records_multiple_replies_for_same_chat,
+        test_update_memory_after_replies_does_not_record_failed_send_as_bot_reply,
         test_default_store_keeps_latest_100_messages,
         test_update_memory_records_skipped_chat_messages_without_reply,
         test_update_memory_records_self_messages_as_assistant,
+        test_update_memory_sanitizes_garbled_binary_like_text,
+        test_store_load_sanitizes_existing_garbled_memory_entries,
         test_replace_recent_memory_uses_database_snapshot_instead_of_appending,
         test_update_memory_indexes_daily_messages_by_user_and_chat,
         test_update_memory_indexes_global_user_daily_memory_across_chats,
