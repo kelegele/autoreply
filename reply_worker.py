@@ -138,12 +138,22 @@ def post_json(url, headers, payload, timeout):
         raise RuntimeError(f"LLM HTTP {exc.code}: {detail}") from exc
     return json.loads(data)
 
+def stable_user_id(pending) -> str:
+    """Derive a stable, non-reversible user identifier from pending chat data."""
+    import hashlib
+    chat_hashes = sorted(set(
+        str(c.get("chat_hash") or "") for c in (pending.get("chats") or []) if c.get("chat_hash")
+    ))
+    raw = "|".join(chat_hashes) if chat_hashes else "unknown"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+    return f"wxbot_{digest}"
+
 def _coerce_messages(prompt_or_messages) -> list[dict]:
     if isinstance(prompt_or_messages, list):
         return prompt_or_messages
     return [{"role": "user", "content": str(prompt_or_messages)}]
 
-def build_chat_payload(prompt_or_messages, config: LLMConfig, log_func=None) -> dict:
+def build_chat_payload(prompt_or_messages, config: LLMConfig, log_func=None, user_id=None) -> dict:
     payload = {
         "model": config.model,
         "messages": _coerce_messages(prompt_or_messages),
@@ -167,10 +177,12 @@ def build_chat_payload(prompt_or_messages, config: LLMConfig, log_func=None) -> 
         if config.reasoning_effort:
             log_func(f"Ignoring DeepSeek-only option LLM_REASONING_EFFORT for provider={config.provider}")
 
+    if user_id:
+        payload["user"] = user_id
     return payload
 
-def call_llm_with_usage(prompt: str, config: LLMConfig, post_json=post_json, log_func=log_line) -> LLMResult:
-    payload = build_chat_payload(prompt, config, log_func=log_func)
+def call_llm_with_usage(prompt: str, config: LLMConfig, post_json=post_json, log_func=log_line, user_id=None) -> LLMResult:
+    payload = build_chat_payload(prompt, config, log_func=log_func, user_id=user_id)
 
     url = chat_completions_url(config.base_url)
     if log_func:
@@ -194,6 +206,13 @@ def call_llm_with_usage(prompt: str, config: LLMConfig, post_json=post_json, log
         content = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
         raise RuntimeError(f"Unexpected LLM response: {data}") from exc
+    finish_reason = data.get("choices",[{}])[0].get("finish_reason", "stop")
+    if finish_reason == "length":
+        raise RuntimeError(f"LLM response truncated: finish_reason=length (model={config.model}), increase max_tokens")
+    if finish_reason == "content_filter":
+        raise RuntimeError(f"LLM response blocked: finish_reason=content_filter (model={config.model})")
+    if finish_reason == "insufficient_system_resource":
+        raise RuntimeError(f"LLM resource exhausted: finish_reason=insufficient_system_resource (model={config.model})")
     return LLMResult(content=content, usage=data.get("usage") or {}, raw=data)
 
 def call_llm(prompt: str, config: LLMConfig, post_json=post_json, log_func=log_line) -> str:
@@ -237,8 +256,11 @@ def run_once(reflect_module, config: LLMConfig, call_llm_func=call_llm_with_usag
 
     log_line(f"Reflect triggered, prompt {_prompt_size(task)} chars")
 
+    pending = getattr(reflect_module, "_pending_data", None)
+    user_id = stable_user_id(pending) if pending else None
+
     try:
-        llm_result = _coerce_llm_result(call_llm_func(task, config))
+        llm_result = _coerce_llm_result(call_llm_func(task, config, user_id=user_id))
         result = llm_result.content
         log_line(f"LLM completed, result {len(result)} chars")
         if llm_result.usage:

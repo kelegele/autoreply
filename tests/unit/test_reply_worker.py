@@ -286,7 +286,7 @@ def test_run_once_passes_reflect_prompt_to_llm_and_on_done():
         def on_done(self, result):
             calls.append(("on_done", result))
 
-    def fake_call_llm(prompt, config):
+    def fake_call_llm(prompt, config, user_id=None):
         calls.append(("llm", prompt, config.model))
         return '[{"chat":"示例用户","content":"好","skip":false}]'
 
@@ -331,7 +331,7 @@ def test_run_once_records_token_usage_for_pending_chats():
             def on_done(self, result):
                 pass
 
-        def fake_call_llm(prompt, config):
+        def fake_call_llm(prompt, config, user_id=None):
             return LLMResult(
                 content='[{"chat":"示例用户","content":"好","skip":false}]',
                 usage={"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
@@ -363,6 +363,120 @@ def test_run_once_does_nothing_when_no_task():
     assert run_once(FakeReflect(), config) is False
 
 
+
+
+def test_call_llm_payload_includes_hashed_user_id():
+    from reply_worker import LLMConfig, call_llm_with_usage
+
+    captured = {}
+
+    def fake_post(url, headers, payload, timeout):
+        captured["payload"] = payload
+        return {"choices": [{"message": {"content": "{}"}}]}
+
+    config = LLMConfig(
+        base_url="https://api.deepseek.com/v1",
+        api_key="test-key",
+        model="deepseek-v4-flash",
+    )
+
+    call_llm_with_usage("hello", config, post_json=fake_post, log_func=None, user_id="wxbot_abc123test")
+
+    assert "user" in captured["payload"]
+    user_val = captured["payload"]["user"]
+    assert user_val.startswith("wxbot_")
+    assert "wxid_f" not in user_val
+    assert "示例用户" not in user_val
+
+def test_call_llm_payload_never_exposes_raw_wxid_or_nickname():
+    from reply_worker import LLMConfig, call_llm
+
+    captured = {}
+
+    def fake_post(url, headers, payload, timeout):
+        captured["payload"] = payload
+        captured["headers"] = headers
+        return {"choices": [{"message": {"content": "{}"}}]}
+
+    config = LLMConfig(
+        base_url="https://api.deepseek.com/v1",
+        api_key="test-key",
+        model="deepseek-v4-flash",
+    )
+
+    call_llm("hello", config, post_json=fake_post)
+
+    payload_str = str(captured["payload"])
+    headers_str = str(captured["headers"])
+    assert "secret-key" not in payload_str
+    assert "test-key" not in payload_str
+
+
+
+def test_call_llm_raises_on_content_filter_finish():
+    from reply_worker import LLMConfig, call_llm_with_usage
+
+    def fake_post(url, headers, payload, timeout):
+        return {"choices": [{"message": {"content": ""}, "finish_reason": "content_filter"}]}
+
+    config = LLMConfig(base_url="https://api.deepseek.com/v1", api_key="test-key", model="deepseek-v4-flash")
+    try:
+        call_llm_with_usage("hello", config, post_json=fake_post, log_func=None)
+        raise AssertionError("Expected RuntimeError for content_filter")
+    except RuntimeError as exc:
+        assert "content_filter" in str(exc)
+
+def test_call_llm_raises_on_insufficient_system_resource():
+    from reply_worker import LLMConfig, call_llm_with_usage
+
+    def fake_post(url, headers, payload, timeout):
+        return {"choices": [{"message": {"content": ""}, "finish_reason": "insufficient_system_resource"}]}
+
+    config = LLMConfig(base_url="https://api.deepseek.com/v1", api_key="test-key", model="deepseek-v4-flash")
+    try:
+        call_llm_with_usage("hello", config, post_json=fake_post, log_func=None)
+        raise AssertionError("Expected RuntimeError for insufficient_system_resource")
+    except RuntimeError as exc:
+        assert "insufficient_system_resource" in str(exc)
+
+def test_token_usage_preserves_reasoning_tokens_and_cache_fields():
+    from reply_worker import LLMConfig, call_llm_with_usage
+
+    def fake_post(url, headers, payload, timeout):
+        return {
+            "choices": [{"message": {"content": "[]"}}],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "completion_tokens_details": {"reasoning_tokens": 3},
+                "prompt_tokens_details": {"cached_tokens": 8},
+                "prompt_cache_hit_tokens": 6,
+                "prompt_cache_miss_tokens": 4,
+            },
+        }
+
+    config = LLMConfig(base_url="https://api.deepseek.com/v1", api_key="test-key", model="deepseek-v4-flash")
+    result = call_llm_with_usage("hello", config, post_json=fake_post, log_func=None)
+    assert result.usage["prompt_tokens"] == 10
+    assert result.usage["prompt_cache_hit_tokens"] == 6
+    assert result.usage["prompt_cache_miss_tokens"] == 4
+    assert result.usage["completion_tokens_details"]["reasoning_tokens"] == 3
+
+def test_token_usage_omits_nonexistent_cache_fields():
+    from reply_worker import LLMConfig, call_llm_with_usage
+
+    def fake_post(url, headers, payload, timeout):
+        return {
+            "choices": [{"message": {"content": "[]"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        }
+
+    config = LLMConfig(base_url="https://api.deepseek.com/v1", api_key="test-key", model="deepseek-v4-flash")
+    result = call_llm_with_usage("hello", config, post_json=fake_post, log_func=None)
+    # Should not inject absent fields
+    assert "prompt_cache_hit_tokens" not in result.usage or result.usage.get("prompt_cache_hit_tokens") is None
+
 if __name__ == "__main__":
     tests = [
         test_chat_completions_url_accepts_base_variants,
@@ -380,6 +494,12 @@ if __name__ == "__main__":
         test_run_once_passes_reflect_prompt_to_llm_and_on_done,
         test_run_once_records_token_usage_for_pending_chats,
         test_run_once_does_nothing_when_no_task,
+        test_call_llm_raises_on_content_filter_finish,
+        test_call_llm_raises_on_insufficient_system_resource,
+        test_token_usage_preserves_reasoning_tokens_and_cache_fields,
+        test_token_usage_omits_nonexistent_cache_fields,
+        test_call_llm_payload_includes_hashed_user_id,
+        test_call_llm_payload_never_exposes_raw_wxid_or_nickname,
     ]
     for test in tests:
         test()
