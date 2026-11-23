@@ -11,7 +11,7 @@
 ## Tasks
 
 1. Create `tests/unit/` and move offline `test_*.py` files into it.
-2. Create `tests/manual/` and move real WeChat/OCR/window automation checks into it.
+2. Create `tests/manual/` and move real IM/OCR/window automation checks into it.
 3. Add small test path helpers so tests can still import root-level modules when run as `uv run python tests/unit/<file>.py` or `uv run python tests/manual/<file>.py`.
 4. Remove obsolete handoff files and old log-parsing tests.
 5. Update `README.md` and `AGENTS.md` so commands and structure descriptions match the new layout.

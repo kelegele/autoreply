@@ -2,7 +2,7 @@
 
 ## Goal
 
-Define the first tool-call layer for the WeChat bot as a small set of high-level cognitive tools, inspired by Codex-style agent harnesses: the model proposes tool calls, the host validates and executes them, then returns results to the model for the final reply.
+Define the first tool-call layer for the bot as a small set of high-level cognitive tools, inspired by Codex-style agent harnesses: the model proposes tool calls, the host validates and executes them, then returns results to the model for the final reply.
 
 This design is intentionally separate from the DeepSeek API upgrade plan. It describes the tool abstraction and safety boundary, not a provider-specific implementation.
 
@@ -10,7 +10,7 @@ This design is intentionally separate from the DeepSeek API upgrade plan. It des
 
 The LLM must never directly operate the machine. It can only request a tool call. The host process owns all execution:
 
-1. LLM receives WeChat context and available tool schemas.
+1. LLM receives chat context and available tool schemas.
 2. LLM returns a tool call request.
 3. `reply_worker.py` validates tool name, schema, permissions, and round limits.
 4. The local tool runs and returns a bounded result.
@@ -48,7 +48,7 @@ Future scopes may include:
 ```text
 device
 network
-wechat
+im
 runtime
 location
 sensor
@@ -57,7 +57,7 @@ sensor
 Examples:
 
 - Current time, timezone, weekday, late-night flag.
-- Whether WeChat window is visible.
+- Whether the chat window is visible.
 - Runtime health such as pending queue age.
 
 ### `memory.recall`
@@ -129,13 +129,13 @@ shell
 file_read
 file_write
 edit
-send_wechat
+send_message
 delete_state
 read_env
 http_request with arbitrary method/body
 ```
 
-Wechat sending remains outside tool calls. The final reply JSON is still the only path to sending messages.
+Message sending remains outside tool calls. The final reply JSON is still the only path to sending messages.
 
 ## Safety Rules
 
@@ -213,7 +213,7 @@ world.discover(..., sources=["web"])
 resource.read(uri=http/https)
 ```
 
-Do not implement write-memory, shell, file tools, browser control, or WeChat action tools in the first milestone.
+Do not implement write-memory, shell, file tools, browser control, or chat action tools in the first milestone.
 
 ## Verification
 

@@ -392,7 +392,7 @@ Expected: no whitespace errors.
 
 ### Task 11: Optional Streaming
 
-**Decision Gate:** Do not implement for WeChat replies unless there is a measured latency problem.
+**Decision Gate:** Do not implement for chat replies unless there is a measured latency problem.
 
 **Plan:**
 
@@ -400,7 +400,7 @@ Expected: no whitespace errors.
 - If enabled, buffer the complete stream before calling `on_done()`.
 - Token usage may arrive differently, so update accounting tests.
 
-**Risk:** Streaming does not help WeChat sending because we must parse full JSON before writing `reply.json`.
+**Risk:** Streaming does not help message sending because we must parse full JSON before writing `reply.json`.
 
 ### Task 12: Tool Calls And Web Search
 
@@ -453,7 +453,7 @@ Expected: all tests pass; compile exits 0; `git diff --check` has no errors.
 ## Rollout
 
 1. Merge Tier 1 first and run locally without restarting automatically.
-2. Ask maintainer before restarting `wechatbot-bot` and `wechatbot-reply-worker`.
+2. Ask maintainer before restarting `autoreply-bot` and `autoreply-reply-worker`.
 3. Observe `reply_worker` logs for payload shape, raw response, `finish_reason`, and token usage.
 4. If JSON mode causes provider errors, turn off `LLM_RESPONSE_FORMAT` and keep the parser backward compatible.
 5. Roll out Tier 2 after one stable run.

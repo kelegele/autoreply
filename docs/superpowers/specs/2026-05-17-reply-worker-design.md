@@ -6,7 +6,7 @@ Replace the GenericAgent `agentmain.py --reflect` dependency with a local reply 
 
 ## Architecture
 
-The project keeps two long-running processes. `bot.py` polls WeChat, writes `exchange/pending.json`, and consumes `exchange/reply.json`. The new `reply_worker.py` is the second process: it loads `reflect_wxchatbot_reply.py`, calls `check()` on an interval, sends returned prompts to an OpenAI-compatible chat completions API, and passes the model output to `on_done()`.
+The project keeps two long-running processes. `bot.py` polls the local chat DB, writes `exchange/pending.json`, and consumes `exchange/reply.json`. The new `reply_worker.py` is the second process: it loads `reflect_wxchatbot_reply.py`, calls `check()` on an interval, sends returned prompts to an OpenAI-compatible chat completions API, and passes the model output to `on_done()`.
 
 This preserves the existing reflect module boundary:
 

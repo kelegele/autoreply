@@ -1,7 +1,7 @@
 # 聊天类型判定规则
 
 ## 规则来源
-通过分析微信DB实际数据（message_0.db），Msg_表名hash和Name2Id的rowid**没有直接映射关系**。
+通过分析实际聊天数据（message_0.db），Msg_表名hash和Name2Id的rowid**没有直接映射关系**。
 Name2Id表存储的是 `rowid → wxid/chatroom` 映射，但Msg_表名里的hash（如`1a2b3c4d...`）
 不是Name2Id的rowid，无法直接通过hash找到对应的聊天。
 

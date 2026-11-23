@@ -2,7 +2,7 @@
 
 ## Goal
 
-Give each WeChat conversation its own local memory so replies are not stateless. The LLM remains a stateless HTTP API; this project supplies per-chat context on every request.
+Give each desktop IM conversation its own local memory so replies are not stateless. The LLM remains a stateless HTTP API; this project supplies per-chat context on every request.
 
 ## Approach
 
